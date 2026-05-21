@@ -17,6 +17,11 @@ let package = Package(
             dependencies: ["ClaudeUsageBarCore"],
             path: "Sources/ClaudeUsageBarApp",
             resources: [.copy("Resources/default-sets")]
+        ),
+        .executableTarget(
+            name: "CoreTestRunner",
+            dependencies: ["ClaudeUsageBarCore"],
+            path: "Sources/CoreTestRunner"
         )
     ]
 )
