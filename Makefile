@@ -16,7 +16,10 @@ run: build
 	.build/debug/ClaudeUsageBar
 
 test:
-	swift test
+	mkdir -p .build/test-bin
+	swift build 2>&1 | head -20
+	swiftc -suppress-warnings -I .build/debug/Modules -enable-testing .test-bin/main.swift Sources/ClaudeUsageBarCore/Stage.swift -o .build/test-bin/stage-tests
+	./.build/test-bin/stage-tests
 
 clean:
 	rm -rf .build ClaudeUsageBar.app

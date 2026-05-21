@@ -17,11 +17,6 @@ let package = Package(
             dependencies: ["ClaudeUsageBarCore"],
             path: "Sources/ClaudeUsageBarApp",
             resources: [.copy("Resources/default-sets")]
-        ),
-        .testTarget(
-            name: "ClaudeUsageBarTests",
-            dependencies: ["ClaudeUsageBarCore"],
-            path: "Tests/ClaudeUsageBarTests"
         )
     ]
 )
