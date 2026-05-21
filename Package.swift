@@ -4,15 +4,23 @@ import PackageDescription
 let package = Package(
     name: "ClaudeUsageBar",
     platforms: [.macOS(.v14)],
+    products: [
+        .executable(name: "ClaudeUsageBar", targets: ["ClaudeUsageBarApp"])
+    ],
     targets: [
+        .target(
+            name: "ClaudeUsageBarCore",
+            path: "Sources/ClaudeUsageBarCore"
+        ),
         .executableTarget(
-            name: "ClaudeUsageBar",
-            path: "Sources/ClaudeUsageBar",
+            name: "ClaudeUsageBarApp",
+            dependencies: ["ClaudeUsageBarCore"],
+            path: "Sources/ClaudeUsageBarApp",
             resources: [.copy("Resources/default-sets")]
         ),
         .testTarget(
             name: "ClaudeUsageBarTests",
-            dependencies: ["ClaudeUsageBar"],
+            dependencies: ["ClaudeUsageBarCore"],
             path: "Tests/ClaudeUsageBarTests"
         )
     ]
