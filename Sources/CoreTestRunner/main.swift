@@ -45,6 +45,47 @@ suite("Stage 애니메이션 간격") {
     check(Stage.burn.animationIntervalSec   == 0.5, "burn   = 0.5s")
 }
 
+// MARK: - CharacterSet tests
+suite("CharacterSet 파싱") {
+    // 1. emoji 세트 파싱
+    let emojiJSON = """
+    {"name":"emoji-faces","type":"emoji","frames":{"chill":"😎","normal":"🙂","busy":"😰","danger":"🥵","burn":"🔥"}}
+    """.data(using: .utf8)!
+    do {
+        let set = try JSONDecoder().decode(ClaudeUsageBarCore.CharacterSet.self, from: emojiJSON)
+        check(set.name == "emoji-faces",         "emoji 세트 name 파싱")
+        check(set.type == .emoji,                "emoji 세트 type 파싱")
+        check(set.value(for: .chill) == "😎",    "emoji chill 프레임")
+        check(set.value(for: .burn)  == "🔥",    "emoji burn 프레임")
+    } catch {
+        check(false, "emoji 세트 디코딩 실패: \(error)")
+    }
+
+    // 2. png 세트 파싱
+    let pngJSON = """
+    {"name":"my-claude-stars","type":"png","frames":{"chill":"chill.png","normal":"normal.png","busy":"busy.png","danger":"danger.png","burn":"burn.png"}}
+    """.data(using: .utf8)!
+    do {
+        let set = try JSONDecoder().decode(ClaudeUsageBarCore.CharacterSet.self, from: pngJSON)
+        check(set.type == .png,                        "png 세트 type 파싱")
+        check(set.value(for: .danger) == "danger.png", "png danger 프레임")
+    } catch {
+        check(false, "png 세트 디코딩 실패: \(error)")
+    }
+
+    // 3. missing frame fallback
+    let partialJSON = """
+    {"name":"partial","type":"emoji","frames":{"chill":"😎"}}
+    """.data(using: .utf8)!
+    do {
+        let set = try JSONDecoder().decode(ClaudeUsageBarCore.CharacterSet.self, from: partialJSON)
+        check(set.value(for: .chill) == "😎", "partial chill 프레임 존재")
+        check(set.value(for: .burn)  == "?",  "partial burn 프레임 누락 → ?")
+    } catch {
+        check(false, "partial 세트 디코딩 실패: \(error)")
+    }
+}
+
 // MARK: - 결과
 print("\n━━━━━━━━━━━━━━━━━━━━━━━")
 print("Total : \(passed + failed)")
