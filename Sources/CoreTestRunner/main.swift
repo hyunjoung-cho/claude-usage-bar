@@ -86,6 +86,55 @@ suite("CharacterSet 파싱") {
     }
 }
 
+// MARK: - Config + ConfigStore tests
+
+func uniqueTempURL(_ tag: String) -> URL {
+    return FileManager.default.temporaryDirectory
+        .appendingPathComponent("config-test-\(tag)-\(UUID().uuidString).json")
+}
+
+suite("Config 기본값 검증") {
+    check(Config.default.version == 1,                    "default version = 1")
+    check(Config.default.activeSet == "emoji-faces",      "default activeSet = emoji-faces")
+    check(Config.default.pollIntervalSec == 60,           "default pollIntervalSec = 60")
+    check(Config.default.showPercentInMenubar == true,    "default showPercentInMenubar = true")
+    check(Config.default.showTimeLeftInMenubar == true,   "default showTimeLeftInMenubar = true")
+    check(Config.default.thresholds.chillMax == 40,       "default chillMax = 40")
+    check(Config.default.thresholds.normalMax == 70,      "default normalMax = 70")
+    check(Config.default.thresholds.busyMax == 85,        "default busyMax = 85")
+    check(Config.default.thresholds.dangerMax == 95,      "default dangerMax = 95")
+}
+
+suite("ConfigStore 파일 없을 때 default 생성") {
+    let url = uniqueTempURL("missing")
+    do {
+        let store = ConfigStore(url: url)
+        let config = try store.load()
+        check(config == .default, "missing file → returns default")
+        check(FileManager.default.fileExists(atPath: url.path), "missing file → side-effect: file created")
+    } catch {
+        check(false, "missing file 로드 실패: \(error)")
+    }
+    try? FileManager.default.removeItem(at: url)
+}
+
+suite("ConfigStore 저장 후 로드 (round-trip)") {
+    let url = uniqueTempURL("roundtrip")
+    do {
+        let store = ConfigStore(url: url)
+        var config = Config.default
+        config.activeSet = "emoji-stars"
+        config.pollIntervalSec = 30
+        try store.save(config)
+        let loaded = try store.load()
+        check(loaded.activeSet == "emoji-stars",  "round-trip: activeSet preserved")
+        check(loaded.pollIntervalSec == 30,        "round-trip: pollIntervalSec preserved")
+    } catch {
+        check(false, "round-trip 실패: \(error)")
+    }
+    try? FileManager.default.removeItem(at: url)
+}
+
 // MARK: - 결과
 print("\n━━━━━━━━━━━━━━━━━━━━━━━")
 print("Total : \(passed + failed)")
