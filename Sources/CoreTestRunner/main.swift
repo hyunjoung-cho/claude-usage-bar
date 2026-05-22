@@ -135,6 +135,59 @@ suite("ConfigStore 저장 후 로드 (round-trip)") {
     try? FileManager.default.removeItem(at: url)
 }
 
+// MARK: - CharacterSetLoader tests
+
+func uniqueTempDir(_ tag: String) -> URL {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("sets-test-\(tag)-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return url
+}
+
+func writeSet(in root: URL, name: String, json: String) {
+    let folder = root.appendingPathComponent(name)
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let setJSON = folder.appendingPathComponent("set.json")
+    try? json.write(to: setJSON, atomically: true, encoding: .utf8)
+}
+
+suite("CharacterSetLoader — 모든 valid 세트 로드") {
+    let root = uniqueTempDir("all-valid")
+    writeSet(in: root, name: "emoji-faces", json: #"{"name":"emoji-faces","type":"emoji","frames":{"chill":"😎","normal":"🙂","busy":"😰","danger":"🥵","burn":"🔥"}}"#)
+    writeSet(in: root, name: "emoji-stars", json: #"{"name":"emoji-stars","type":"emoji","frames":{"chill":"✨","normal":"🌟","busy":"💫","danger":"☄️","burn":"🔥"}}"#)
+    let sets = CharacterSetLoader(rootURL: root).loadAll()
+    check(sets.count == 2, "두 valid 세트 로드됨")
+    check(sets.contains(where: { $0.name == "emoji-faces" }), "emoji-faces 포함")
+    check(sets.contains(where: { $0.name == "emoji-stars" }), "emoji-stars 포함")
+    try? FileManager.default.removeItem(at: root)
+}
+
+suite("CharacterSetLoader — 깨진 JSON 스킵") {
+    let root = uniqueTempDir("skip-invalid")
+    writeSet(in: root, name: "valid", json: #"{"name":"valid","type":"emoji","frames":{"chill":"😎","normal":"🙂","busy":"😰","danger":"🥵","burn":"🔥"}}"#)
+    writeSet(in: root, name: "invalid", json: "{ not valid json")
+    let sets = CharacterSetLoader(rootURL: root).loadAll()
+    check(sets.count == 1, "깨진 json 스킵 → 1개만 로드")
+    check(sets[0].name == "valid", "valid 세트만 살아남음")
+    try? FileManager.default.removeItem(at: root)
+}
+
+suite("CharacterSetLoader — PNG 세트 folderURL 채워짐") {
+    let root = uniqueTempDir("png-folder")
+    writeSet(in: root, name: "my-claude-stars", json: #"{"name":"my-claude-stars","type":"png","frames":{"chill":"chill.png","normal":"normal.png","busy":"busy.png","danger":"danger.png","burn":"burn.png"}}"#)
+    let sets = CharacterSetLoader(rootURL: root).loadAll()
+    check(sets.count == 1, "png 세트 1개 로드")
+    check(sets[0].folderURL != nil, "png 세트의 folderURL 채워짐")
+    check(sets[0].folderURL!.lastPathComponent == "my-claude-stars", "folderURL이 해당 폴더를 가리킴")
+    try? FileManager.default.removeItem(at: root)
+}
+
+suite("CharacterSetLoader — 빈 루트 → 빈 배열") {
+    let root = uniqueTempDir("empty-root")
+    check(CharacterSetLoader(rootURL: root).loadAll().count == 0, "빈 폴더 → 빈 배열")
+    try? FileManager.default.removeItem(at: root)
+}
+
 // MARK: - 결과
 print("\n━━━━━━━━━━━━━━━━━━━━━━━")
 print("Total : \(passed + failed)")
