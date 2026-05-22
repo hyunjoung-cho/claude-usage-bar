@@ -1,7 +1,7 @@
 import Foundation
 
 public struct Config: Codable, Equatable {
-    public var version: Int
+    public let version: Int
     public var activeSet: String
     public var pollIntervalSec: Int
     public var thresholds: Thresholds

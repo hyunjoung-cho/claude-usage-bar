@@ -7,13 +7,15 @@ public final class ConfigStore {
         self.url = url
     }
 
-    public static var defaultURL: URL {
+    public static let defaultURL: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base
             .appendingPathComponent("ClaudeUsageBar")
             .appendingPathComponent("config.json")
-    }
+    }()
 
+    /// 설정 파일을 로드합니다.
+    /// 파일이 존재하지 않을 경우 기본값으로 새 파일을 생성한 뒤 반환합니다.
     public func load() throws -> Config {
         if !FileManager.default.fileExists(atPath: url.path) {
             try save(.default)
