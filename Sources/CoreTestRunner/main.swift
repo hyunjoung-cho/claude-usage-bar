@@ -188,6 +188,56 @@ suite("CharacterSetLoader — 빈 루트 → 빈 배열") {
     try? FileManager.default.removeItem(at: root)
 }
 
+// MARK: - SessionKeyManager tests
+
+/// 각 테스트마다 고유한 Keychain service ID를 생성합니다.
+/// → 테스트 간 충돌 방지, 실제 프로덕션 데이터와도 완전 격리.
+/// NOTE: macOS CLI 툴이 Keychain에 처음 접근할 때 "Always Allow / Deny" 팝업이
+///       뜰 수 있습니다. "Always Allow"를 한 번 클릭한 뒤 `make test`를 재실행하세요.
+func uniqueKeychainService(_ tag: String) -> String {
+    return "com.goldplat.claude-usage-bar.test.\(tag).\(UUID().uuidString)"
+}
+
+suite("SessionKeyManager — 빈 keychain load nil") {
+    let manager = SessionKeyManager(service: uniqueKeychainService("empty"))
+    check(manager.load() == nil, "빈 keychain → load nil")
+    manager.delete()  // cleanup
+}
+
+suite("SessionKeyManager — save 후 load 값 일치") {
+    let manager = SessionKeyManager(service: uniqueKeychainService("save-load"))
+    do {
+        try manager.save("abc123-session-key")
+        check(manager.load() == "abc123-session-key", "save 후 load 값 일치")
+    } catch {
+        check(false, "save 실패: \(error)")
+    }
+    manager.delete()
+}
+
+suite("SessionKeyManager — save 덮어쓰기") {
+    let manager = SessionKeyManager(service: uniqueKeychainService("overwrite"))
+    do {
+        try manager.save("first")
+        try manager.save("second")
+        check(manager.load() == "second", "두 번째 save가 첫 값을 덮어씀")
+    } catch {
+        check(false, "save 덮어쓰기 실패: \(error)")
+    }
+    manager.delete()
+}
+
+suite("SessionKeyManager — delete 후 load nil") {
+    let manager = SessionKeyManager(service: uniqueKeychainService("delete"))
+    do {
+        try manager.save("to-delete")
+        manager.delete()
+        check(manager.load() == nil, "delete 후 load nil")
+    } catch {
+        check(false, "save 실패: \(error)")
+    }
+}
+
 // MARK: - 결과
 print("\n━━━━━━━━━━━━━━━━━━━━━━━")
 print("Total : \(passed + failed)")
