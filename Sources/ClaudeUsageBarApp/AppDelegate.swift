@@ -116,6 +116,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             activeSet: config.activeSet,
             onRefresh: { [weak self] in self?.handleRefresh() },
             onSelectSet: { [weak self] name in self?.handleSelectSet(name) },
+            onSettings: {
+                NSLog("[ClaudeUsageBar] 설정창은 T14에서 구현됩니다.")
+            },
             onQuit: { NSApplication.shared.terminate(nil) }
         )
         statusItem.menu = menu
