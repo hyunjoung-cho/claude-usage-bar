@@ -103,6 +103,9 @@ suite("Config 기본값 검증") {
     check(Config.default.thresholds.normalMax == 70,      "default normalMax = 70")
     check(Config.default.thresholds.busyMax == 85,        "default busyMax = 85")
     check(Config.default.thresholds.dangerMax == 95,      "default dangerMax = 95")
+    check(Config.default.plan == .pro,                    "default plan = .pro")
+    check(Config.default.customLimits == nil,             "default customLimits = nil")
+    check(Config.default.effectiveLimits == TokenLimits.pro, "default effectiveLimits = pro limits")
 }
 
 suite("ConfigStore 파일 없을 때 default 생성") {
@@ -238,111 +241,137 @@ suite("SessionKeyManager — delete 후 load nil") {
     }
 }
 
-// MARK: - Async helpers
+// MARK: - UsageScanner 헬퍼
 
-func runAsync<T>(_ body: @escaping () async -> T) -> T {
-    let semaphore = DispatchSemaphore(value: 0)
-    var result: T?
-    Task {
-        result = await body()
-        semaphore.signal()
-    }
-    semaphore.wait()
-    return result!
+func uniqueClaudeRoot(_ tag: String) -> URL {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("claude-scan-\(tag)-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: url.appendingPathComponent("dummy-project"), withIntermediateDirectories: true)
+    return url
 }
 
-func mockSession() -> URLSession {
-    let config = URLSessionConfiguration.ephemeral
-    config.protocolClasses = [MockURLProtocol.self]
-    return URLSession(configuration: config)
+func writeJsonlLine(in root: URL, project: String, sessionId: String, line: String) {
+    let projectDir = root.appendingPathComponent(project)
+    try? FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+    let file = projectDir.appendingPathComponent("\(sessionId).jsonl")
+    let existing = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+    try? (existing + line + "\n").write(to: file, atomically: true, encoding: .utf8)
 }
 
-// MARK: - UsagePoller tests
+func assistantJsonl(timestamp: String, model: String, input: Int, cacheCreate: Int, cacheRead: Int, output: Int) -> String {
+    return #"{"type":"assistant","timestamp":"\#(timestamp)","message":{"model":"\#(model)","usage":{"input_tokens":\#(input),"cache_creation_input_tokens":\#(cacheCreate),"cache_read_input_tokens":\#(cacheRead),"output_tokens":\#(output)}}}"#
+}
 
-suite("UsagePoller fetchOnce — noSessionKey") {
-    MockURLProtocol.reset()
-    let keyManager = SessionKeyManager(service: uniqueKeychainService("no-key"))
-    let poller = UsagePoller(keyManager: keyManager, session: mockSession())
-    let result = runAsync { await poller.fetchOnce() }
-    if case .failure(let err) = result, err == .noSessionKey {
-        check(true, "키 없음 → noSessionKey")
+// MARK: - UsageScanner tests
+
+suite("UsageScanner — noClaudeData (존재하지 않는 디렉토리)") {
+    let nonExistentURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("claude-nonexistent-\(UUID().uuidString)")
+    let scanner = UsageScanner(projectsRoot: nonExistentURL)
+    let result = scanner.scan(limits: .pro)
+    if case .failure(let err) = result, err == .noClaudeData {
+        check(true, "존재하지 않는 디렉토리 → noClaudeData")
     } else {
-        check(false, "기대 .noSessionKey, 실제 \(result)")
+        check(false, "기대 .noClaudeData, 실제 \(result)")
     }
-    keyManager.delete()
 }
 
-suite("UsagePoller fetchOnce — sessionExpired on HTTP 401") {
-    MockURLProtocol.reset()
-    let keyManager = SessionKeyManager(service: uniqueKeychainService("session-expired"))
-    do {
-        try keyManager.save("dummy")
-        MockURLProtocol.responder = { _ in
-            (HTTPURLResponse(url: URL(string: "https://claude.ai")!, statusCode: 401, httpVersion: nil, headerFields: nil)!, Data())
-        }
-        let poller = UsagePoller(keyManager: keyManager, session: mockSession())
-        let result = runAsync { await poller.fetchOnce() }
-        if case .failure(let err) = result, err == .sessionExpired {
-            check(true, "HTTP 401 → sessionExpired")
-        } else {
-            check(false, "기대 .sessionExpired, 실제 \(result)")
-        }
-    } catch {
-        check(false, "save 실패: \(error)")
+suite("UsageScanner — 빈 디렉토리는 0 토큰") {
+    let root = uniqueClaudeRoot("empty")
+    let scanner = UsageScanner(projectsRoot: root)
+    let result = scanner.scan(limits: .pro)
+    if case .success(let usage) = result {
+        check(usage.fiveHourWindow.usedTokens == 0, "fiveHourWindow usedTokens == 0")
+        check(usage.weeklyWindow.usedTokens == 0,   "weeklyWindow usedTokens == 0")
+        check(usage.opusWindow.usedTokens == 0,     "opusWindow usedTokens == 0")
+    } else {
+        check(false, "기대 .success, 실제 \(result)")
     }
-    keyManager.delete()
+    try? FileManager.default.removeItem(at: root)
 }
 
-suite("UsagePoller fetchOnce — success parses usage") {
-    MockURLProtocol.reset()
-    let keyManager = SessionKeyManager(service: uniqueKeychainService("success-parse"))
-    do {
-        try keyManager.save("dummy")
-        let json = """
-        {
-          "five_hour_window": {"used_percent":67,"resets_at":"2026-05-20T18:30:00Z"},
-          "weekly_window":    {"used_percent":42,"resets_at":"2026-05-25T00:00:00Z"},
-          "opus_window":      {"used_percent":12,"resets_at":"2026-05-20T18:30:00Z"}
-        }
-        """.data(using: .utf8)!
-        MockURLProtocol.responder = { _ in
-            (HTTPURLResponse(url: URL(string: "https://claude.ai")!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
-        }
-        let poller = UsagePoller(keyManager: keyManager, session: mockSession())
-        let result = runAsync { await poller.fetchOnce() }
-        if case .success(let usage) = result {
-            check(usage.fiveHourWindow.usedPercent == 67, "fiveHourWindow.usedPercent == 67")
-            check(usage.weeklyWindow.usedPercent   == 42, "weeklyWindow.usedPercent == 42")
-            check(usage.opusWindow.usedPercent     == 12, "opusWindow.usedPercent == 12")
-        } else {
-            check(false, "기대 .success, 실제 \(result)")
-        }
-    } catch {
-        check(false, "save 실패: \(error)")
+suite("UsageScanner — 단일 assistant 라인 파싱") {
+    let root = uniqueClaudeRoot("single-line")
+    // fixedNow = 2026-05-26T12:00:00Z, timestamp = 1시간 전 = 2026-05-26T11:00:00Z
+    let fixedNowStr = "2026-05-26T12:00:00Z"
+    let oneHourAgoStr = "2026-05-26T11:00:00.000Z"   // fractional seconds 포함
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    let fixedNow = formatter.date(from: fixedNowStr)!
+
+    writeJsonlLine(in: root, project: "proj1", sessionId: "sess1",
+        line: assistantJsonl(timestamp: oneHourAgoStr, model: "claude-sonnet-4-6",
+                             input: 100, cacheCreate: 200, cacheRead: 300, output: 400))
+
+    let scanner = UsageScanner(projectsRoot: root, now: { fixedNow })
+    let result = scanner.scan(limits: .pro)
+    if case .success(let usage) = result {
+        check(usage.fiveHourWindow.usedTokens == 1000, "fiveHourTotal == 1000 (100+200+300+400)")
+        check(usage.opusWindow.usedTokens == 0,        "opusTotal == 0 (sonnet이라 Opus 아님)")
+        check(usage.weeklyWindow.usedTokens == 1000,   "weeklyTotal == 1000")
+        check(usage.fiveHourWindow.usedPercent == 2,   "fiveHour usedPercent == 2% (1000/50000)")
+    } else {
+        check(false, "기대 .success, 실제 \(result)")
     }
-    keyManager.delete()
+    try? FileManager.default.removeItem(at: root)
 }
 
-suite("UsagePoller fetchOnce — schemaChanged on bad JSON") {
-    MockURLProtocol.reset()
-    let keyManager = SessionKeyManager(service: uniqueKeychainService("schema-changed"))
-    do {
-        try keyManager.save("dummy")
-        let badJSON = #"{"unexpected":"shape"}"#.data(using: .utf8)!
-        MockURLProtocol.responder = { _ in
-            (HTTPURLResponse(url: URL(string: "https://claude.ai")!, statusCode: 200, httpVersion: nil, headerFields: nil)!, badJSON)
-        }
-        let poller = UsagePoller(keyManager: keyManager, session: mockSession())
-        let result = runAsync { await poller.fetchOnce() }
-        if case .failure(let err) = result, case .schemaChanged(_) = err {
-            check(true, "잘못된 JSON → schemaChanged")
-        } else {
-            check(false, "기대 .schemaChanged, 실제 \(result)")
-        }
-    } catch {
-        check(false, "save 실패: \(error)")
+suite("UsageScanner — Opus 모델만 opusTotal에 합산") {
+    let root = uniqueClaudeRoot("opus-filter")
+    let fixedNowStr = "2026-05-26T12:00:00Z"
+    let thirtyMinAgoStr = "2026-05-26T11:30:00Z"   // fractional seconds 없는 형식
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    let fixedNow = formatter.date(from: fixedNowStr)!
+
+    // sonnet 500 토큰 (input 100 + cacheCreate 100 + cacheRead 100 + output 200 = 500)
+    writeJsonlLine(in: root, project: "proj1", sessionId: "sess1",
+        line: assistantJsonl(timestamp: thirtyMinAgoStr, model: "claude-sonnet-4-6",
+                             input: 100, cacheCreate: 100, cacheRead: 100, output: 200))
+    // opus 700 토큰 (input 200 + cacheCreate 200 + cacheRead 100 + output 200 = 700)
+    writeJsonlLine(in: root, project: "proj1", sessionId: "sess1",
+        line: assistantJsonl(timestamp: thirtyMinAgoStr, model: "claude-opus-4-7",
+                             input: 200, cacheCreate: 200, cacheRead: 100, output: 200))
+
+    let scanner = UsageScanner(projectsRoot: root, now: { fixedNow })
+    let result = scanner.scan(limits: .pro)
+    if case .success(let usage) = result {
+        check(usage.fiveHourWindow.usedTokens == 1200, "fiveHourTotal == 1200 (500+700)")
+        check(usage.opusWindow.usedTokens == 700,      "opusTotal == 700 (opus만)")
+        check(usage.weeklyWindow.usedTokens == 1200,   "weeklyTotal == 1200")
+    } else {
+        check(false, "기대 .success, 실제 \(result)")
     }
-    keyManager.delete()
+    try? FileManager.default.removeItem(at: root)
+}
+
+suite("UsageScanner — 5h 윈도우 밖 메시지는 제외") {
+    let root = uniqueClaudeRoot("window-filter")
+    let fixedNowStr = "2026-05-26T12:00:00Z"
+    let sixHoursAgoStr = "2026-05-26T06:00:00Z"   // 6시간 전 — 5h 윈도우 밖
+    let oneHourAgoStr = "2026-05-26T11:00:00Z"    // 1시간 전 — 5h 윈도우 안
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    let fixedNow = formatter.date(from: fixedNowStr)!
+
+    // 6시간 전 메시지 1000 토큰
+    writeJsonlLine(in: root, project: "proj1", sessionId: "sess1",
+        line: assistantJsonl(timestamp: sixHoursAgoStr, model: "claude-sonnet-4-6",
+                             input: 250, cacheCreate: 250, cacheRead: 250, output: 250))
+    // 1시간 전 메시지 1000 토큰
+    writeJsonlLine(in: root, project: "proj1", sessionId: "sess1",
+        line: assistantJsonl(timestamp: oneHourAgoStr, model: "claude-sonnet-4-6",
+                             input: 250, cacheCreate: 250, cacheRead: 250, output: 250))
+
+    let scanner = UsageScanner(projectsRoot: root, now: { fixedNow })
+    let result = scanner.scan(limits: .pro)
+    if case .success(let usage) = result {
+        check(usage.fiveHourWindow.usedTokens == 1000, "fiveHourTotal == 1000 (1시간 전만)")
+        check(usage.weeklyWindow.usedTokens == 2000,   "weeklyTotal == 2000 (둘 다 주간 안)")
+    } else {
+        check(false, "기대 .success, 실제 \(result)")
+    }
+    try? FileManager.default.removeItem(at: root)
 }
 
 // MARK: - 결과

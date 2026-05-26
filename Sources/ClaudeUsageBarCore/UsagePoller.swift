@@ -1,9 +1,8 @@
 import Foundation
 
 public final class UsagePoller {
-    private let keyManager: SessionKeyManager
-    private let session: URLSession
-    private let endpoint: URL
+    private let scanner: UsageScanner
+    public var limits: TokenLimits   // mutable, AppDelegate가 plan 바뀔 때 갱신
 
     /// 폴링 성공 시 호출됩니다.
     /// - Warning: 콜백은 임의 스레드에서 호출됩니다. AppKit/SwiftUI 업데이트는 반드시
@@ -13,18 +12,13 @@ public final class UsagePoller {
     /// 폴링 실패 시 호출됩니다.
     /// - Warning: 콜백은 임의 스레드에서 호출됩니다. AppKit/SwiftUI 업데이트는 반드시
     ///   `DispatchQueue.main.async` 또는 `@MainActor`로 감싸세요.
-    public var onError:  ((PollError) -> Void)?
+    public var onError: ((PollError) -> Void)?
 
     private var timer: Timer?
 
-    public init(
-        keyManager: SessionKeyManager,
-        session: URLSession = .shared,
-        endpoint: URL = URL(string: "https://claude.ai/api/account/usage")!
-    ) {
-        self.keyManager = keyManager
-        self.session = session
-        self.endpoint = endpoint
+    public init(scanner: UsageScanner = UsageScanner(), limits: TokenLimits = .pro) {
+        self.scanner = scanner
+        self.limits = limits
     }
 
     public func start(intervalSec: Int) {
@@ -48,31 +42,8 @@ public final class UsagePoller {
         }
     }
 
-    /// API를 한 번 호출하여 UsageData 또는 에러를 반환합니다.
-    /// 네트워크/스키마/세션키 오류를 모두 `PollError`로 매핑합니다.
+    /// 디스크에서 Claude Code 사용량을 한 번 스캔합니다.
     public func fetchOnce() async -> Result<UsageData, PollError> {
-        guard let key = keyManager.load() else {
-            return .failure(.noSessionKey)
-        }
-        var request = URLRequest(url: endpoint)
-        request.setValue("sessionKey=\(key)", forHTTPHeaderField: "Cookie")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-
-        do {
-            let (data, response) = try await session.data(for: request)
-            if let http = response as? HTTPURLResponse, http.statusCode == 401 {
-                return .failure(.sessionExpired)
-            }
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            do {
-                let usage = try decoder.decode(UsageData.self, from: data)
-                return .success(usage)
-            } catch {
-                return .failure(.schemaChanged(String(describing: error)))
-            }
-        } catch {
-            return .failure(.network(error.localizedDescription))
-        }
+        return scanner.scan(limits: limits)
     }
 }
