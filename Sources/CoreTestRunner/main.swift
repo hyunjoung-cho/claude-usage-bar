@@ -238,6 +238,113 @@ suite("SessionKeyManager — delete 후 load nil") {
     }
 }
 
+// MARK: - Async helpers
+
+func runAsync<T>(_ body: @escaping () async -> T) -> T {
+    let semaphore = DispatchSemaphore(value: 0)
+    var result: T?
+    Task {
+        result = await body()
+        semaphore.signal()
+    }
+    semaphore.wait()
+    return result!
+}
+
+func mockSession() -> URLSession {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [MockURLProtocol.self]
+    return URLSession(configuration: config)
+}
+
+// MARK: - UsagePoller tests
+
+suite("UsagePoller fetchOnce — noSessionKey") {
+    MockURLProtocol.reset()
+    let keyManager = SessionKeyManager(service: uniqueKeychainService("no-key"))
+    let poller = UsagePoller(keyManager: keyManager, session: mockSession())
+    let result = runAsync { await poller.fetchOnce() }
+    if case .failure(let err) = result, err == .noSessionKey {
+        check(true, "키 없음 → noSessionKey")
+    } else {
+        check(false, "기대 .noSessionKey, 실제 \(result)")
+    }
+    keyManager.delete()
+}
+
+suite("UsagePoller fetchOnce — sessionExpired on HTTP 401") {
+    MockURLProtocol.reset()
+    let keyManager = SessionKeyManager(service: uniqueKeychainService("session-expired"))
+    do {
+        try keyManager.save("dummy")
+        MockURLProtocol.responder = { _ in
+            (HTTPURLResponse(url: URL(string: "https://claude.ai")!, statusCode: 401, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        let poller = UsagePoller(keyManager: keyManager, session: mockSession())
+        let result = runAsync { await poller.fetchOnce() }
+        if case .failure(let err) = result, err == .sessionExpired {
+            check(true, "HTTP 401 → sessionExpired")
+        } else {
+            check(false, "기대 .sessionExpired, 실제 \(result)")
+        }
+    } catch {
+        check(false, "save 실패: \(error)")
+    }
+    keyManager.delete()
+}
+
+suite("UsagePoller fetchOnce — success parses usage") {
+    MockURLProtocol.reset()
+    let keyManager = SessionKeyManager(service: uniqueKeychainService("success-parse"))
+    do {
+        try keyManager.save("dummy")
+        let json = """
+        {
+          "five_hour_window": {"used_percent":67,"resets_at":"2026-05-20T18:30:00Z"},
+          "weekly_window":    {"used_percent":42,"resets_at":"2026-05-25T00:00:00Z"},
+          "opus_window":      {"used_percent":12,"resets_at":"2026-05-20T18:30:00Z"}
+        }
+        """.data(using: .utf8)!
+        MockURLProtocol.responder = { _ in
+            (HTTPURLResponse(url: URL(string: "https://claude.ai")!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+        let poller = UsagePoller(keyManager: keyManager, session: mockSession())
+        let result = runAsync { await poller.fetchOnce() }
+        if case .success(let usage) = result {
+            check(usage.fiveHourWindow.usedPercent == 67, "fiveHourWindow.usedPercent == 67")
+            check(usage.weeklyWindow.usedPercent   == 42, "weeklyWindow.usedPercent == 42")
+            check(usage.opusWindow.usedPercent     == 12, "opusWindow.usedPercent == 12")
+        } else {
+            check(false, "기대 .success, 실제 \(result)")
+        }
+    } catch {
+        check(false, "save 실패: \(error)")
+    }
+    keyManager.delete()
+}
+
+suite("UsagePoller fetchOnce — schemaChanged on bad JSON") {
+    MockURLProtocol.reset()
+    let keyManager = SessionKeyManager(service: uniqueKeychainService("schema-changed"))
+    do {
+        try keyManager.save("dummy")
+        let badJSON = #"{"unexpected":"shape"}"#.data(using: .utf8)!
+        MockURLProtocol.responder = { _ in
+            (HTTPURLResponse(url: URL(string: "https://claude.ai")!, statusCode: 200, httpVersion: nil, headerFields: nil)!, badJSON)
+        }
+        let poller = UsagePoller(keyManager: keyManager, session: mockSession())
+        let result = runAsync { await poller.fetchOnce() }
+        if case .failure(let err) = result, case .schemaChanged(_) = err {
+            check(true, "잘못된 JSON → schemaChanged")
+        } else {
+            check(false, "기대 .schemaChanged, 실제 \(result)")
+        }
+    } catch {
+        check(false, "save 실패: \(error)")
+    }
+    keyManager.delete()
+}
+
 // MARK: - 결과
 print("\n━━━━━━━━━━━━━━━━━━━━━━━")
 print("Total : \(passed + failed)")
