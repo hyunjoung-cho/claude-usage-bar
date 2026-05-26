@@ -1,0 +1,11 @@
+{
+  "name": "emoji-animals",
+  "type": "emoji",
+  "frames": {
+    "chill":  "🐱",
+    "normal": "🐯",
+    "busy":   "🐵",
+    "danger": "👻",
+    "burn":   "🔥"
+  }
+}

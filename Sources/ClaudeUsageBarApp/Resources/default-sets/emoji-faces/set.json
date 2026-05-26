@@ -1,0 +1,11 @@
+{
+  "name": "emoji-faces",
+  "type": "emoji",
+  "frames": {
+    "chill":  "😎",
+    "normal": "🙂",
+    "busy":   "😰",
+    "danger": "🥵",
+    "burn":   "🔥"
+  }
+}

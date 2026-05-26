@@ -1,0 +1,11 @@
+{
+  "name": "emoji-stars",
+  "type": "emoji",
+  "frames": {
+    "chill":  "✨",
+    "normal": "🌟",
+    "busy":   "💫",
+    "danger": "☄️",
+    "burn":   "🔥"
+  }
+}
