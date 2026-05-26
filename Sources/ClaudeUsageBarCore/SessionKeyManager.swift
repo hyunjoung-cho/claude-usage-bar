@@ -46,9 +46,13 @@ public final class SessionKeyManager {
             kSecAttrAccount: account
         ]
         // 기존 항목을 먼저 삭제해야 덮어쓰기가 됩니다 (SecItemUpdate 대신 delete+add 패턴).
-        SecItemDelete(baseQuery as CFDictionary)
+        let deleteStatus = SecItemDelete(baseQuery as CFDictionary)
+        if deleteStatus != errSecSuccess && deleteStatus != errSecItemNotFound {
+            throw KeychainError.saveFailed(deleteStatus)
+        }
         var addQuery = baseQuery
         addQuery[kSecValueData] = data
+        addQuery[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlocked
         let status = SecItemAdd(addQuery as CFDictionary, nil)
         guard status == errSecSuccess else {
             throw KeychainError.saveFailed(status)
