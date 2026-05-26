@@ -116,8 +116,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             activeSet: config.activeSet,
             onRefresh: { [weak self] in self?.handleRefresh() },
             onSelectSet: { [weak self] name in self?.handleSelectSet(name) },
-            onSettings: {
-                NSLog("[ClaudeUsageBar] 설정창은 T14에서 구현됩니다.")
+            onSettings: { [weak self] in
+                guard let self = self else { return }
+                SettingsView.present(
+                    current: self.config,
+                    onSave: { [weak self] updated in
+                        self?.handleConfigSave(updated)
+                    },
+                    onResetSessionKey: { [weak self] in
+                        self?.handleResetSessionKey()
+                    }
+                )
             },
             onQuit: { NSApplication.shared.terminate(nil) }
         )
@@ -137,5 +146,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             engine.use(set: s)
         }
         rebuildMenu()
+    }
+
+    @MainActor
+    private func handleConfigSave(_ updated: Config) {
+        self.config = updated
+        try? configStore.save(updated)
+        engine.use(thresholds: updated.thresholds)
+        engine.use(showPercent: updated.showPercentInMenubar, showTimeLeft: updated.showTimeLeftInMenubar)
+        // 다음 폴링부터 새 주기 적용
+        poller.start(intervalSec: updated.pollIntervalSec)
+        rebuildMenu()
+    }
+
+    @MainActor
+    private func handleResetSessionKey() {
+        keyManager.delete()
+        poller.stop()
+        engine.showStatus(text: "⚠ 세션키 등록")
+        SessionKeyEntryView.present { [weak self] key in
+            try? self?.keyManager.save(key)
+            self?.poller.start(intervalSec: self?.config.pollIntervalSec ?? 60)
+        }
     }
 }
