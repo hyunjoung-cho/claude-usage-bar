@@ -4,7 +4,7 @@ public enum SetType: String, Codable, Equatable {
     case emoji, png
 }
 
-public struct CharacterSet: Codable, Equatable {
+public struct IconSet: Codable, Equatable {
     public let name: String
     public let type: SetType
     public let frames: [String: String]

@@ -1,6 +1,6 @@
 import Foundation
 
-public final class CharacterSetLoader {
+public final class IconSetLoader {
     private let rootURL: URL
 
     public init(rootURL: URL) {
@@ -18,13 +18,13 @@ public final class CharacterSetLoader {
     /// JSON이 깨졌거나 파일이 없는 폴더는 건너뜁니다.
     /// PNG 타입 세트는 `folderURL`을 자동으로 채워줍니다.
     /// 결과는 이름 오름차순으로 정렬됩니다.
-    public func loadAll() -> [CharacterSet] {
+    public func loadAll() -> [IconSet] {
         guard let folders = try? FileManager.default.contentsOfDirectory(
             at: rootURL,
             includingPropertiesForKeys: [.isDirectoryKey]
         ) else { return [] }
 
-        var result: [CharacterSet] = []
+        var result: [IconSet] = []
         for folder in folders {
             var isDir: ObjCBool = false
             FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDir)
@@ -32,7 +32,7 @@ public final class CharacterSetLoader {
 
             let setJSON = folder.appendingPathComponent("set.json")
             guard let data = try? Data(contentsOf: setJSON),
-                  var set = try? JSONDecoder().decode(CharacterSet.self, from: data)
+                  var set = try? JSONDecoder().decode(IconSet.self, from: data)
             else { continue }
             if set.type == .png { set.folderURL = folder }
             result.append(set)
@@ -40,7 +40,7 @@ public final class CharacterSetLoader {
         return result.sorted { $0.name < $1.name }
     }
 
-    public func set(named name: String) -> CharacterSet? {
+    public func set(named name: String) -> IconSet? {
         loadAll().first { $0.name == name }
     }
 }

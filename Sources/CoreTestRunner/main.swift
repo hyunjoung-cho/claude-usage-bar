@@ -45,14 +45,14 @@ suite("Stage 애니메이션 간격") {
     check(Stage.burn.animationIntervalSec   == 0.5, "burn   = 0.5s")
 }
 
-// MARK: - CharacterSet tests
-suite("CharacterSet 파싱") {
+// MARK: - IconSet tests
+suite("IconSet 파싱") {
     // 1. emoji 세트 파싱
     let emojiJSON = """
     {"name":"emoji-faces","type":"emoji","frames":{"chill":"😎","normal":"🙂","busy":"😰","danger":"🥵","burn":"🔥"}}
     """.data(using: .utf8)!
     do {
-        let set = try JSONDecoder().decode(ClaudeUsageBarCore.CharacterSet.self, from: emojiJSON)
+        let set = try JSONDecoder().decode(ClaudeUsageBarCore.IconSet.self, from: emojiJSON)
         check(set.name == "emoji-faces",         "emoji 세트 name 파싱")
         check(set.type == .emoji,                "emoji 세트 type 파싱")
         check(set.value(for: .chill) == "😎",    "emoji chill 프레임")
@@ -66,7 +66,7 @@ suite("CharacterSet 파싱") {
     {"name":"my-claude-stars","type":"png","frames":{"chill":"chill.png","normal":"normal.png","busy":"busy.png","danger":"danger.png","burn":"burn.png"}}
     """.data(using: .utf8)!
     do {
-        let set = try JSONDecoder().decode(ClaudeUsageBarCore.CharacterSet.self, from: pngJSON)
+        let set = try JSONDecoder().decode(ClaudeUsageBarCore.IconSet.self, from: pngJSON)
         check(set.type == .png,                        "png 세트 type 파싱")
         check(set.value(for: .danger) == "danger.png", "png danger 프레임")
     } catch {
@@ -78,7 +78,7 @@ suite("CharacterSet 파싱") {
     {"name":"partial","type":"emoji","frames":{"chill":"😎"}}
     """.data(using: .utf8)!
     do {
-        let set = try JSONDecoder().decode(ClaudeUsageBarCore.CharacterSet.self, from: partialJSON)
+        let set = try JSONDecoder().decode(ClaudeUsageBarCore.IconSet.self, from: partialJSON)
         check(set.value(for: .chill) == "😎", "partial chill 프레임 존재")
         check(set.value(for: .burn)  == "?",  "partial burn 프레임 누락 → ?")
     } catch {
@@ -135,7 +135,7 @@ suite("ConfigStore 저장 후 로드 (round-trip)") {
     try? FileManager.default.removeItem(at: url)
 }
 
-// MARK: - CharacterSetLoader tests
+// MARK: - IconSetLoader tests
 
 func uniqueTempDir(_ tag: String) -> URL {
     let url = FileManager.default.temporaryDirectory
@@ -151,40 +151,40 @@ func writeSet(in root: URL, name: String, json: String) {
     try? json.write(to: setJSON, atomically: true, encoding: .utf8)
 }
 
-suite("CharacterSetLoader — 모든 valid 세트 로드") {
+suite("IconSetLoader — 모든 valid 세트 로드") {
     let root = uniqueTempDir("all-valid")
     writeSet(in: root, name: "emoji-faces", json: #"{"name":"emoji-faces","type":"emoji","frames":{"chill":"😎","normal":"🙂","busy":"😰","danger":"🥵","burn":"🔥"}}"#)
     writeSet(in: root, name: "emoji-stars", json: #"{"name":"emoji-stars","type":"emoji","frames":{"chill":"✨","normal":"🌟","busy":"💫","danger":"☄️","burn":"🔥"}}"#)
-    let sets = CharacterSetLoader(rootURL: root).loadAll()
+    let sets = IconSetLoader(rootURL: root).loadAll()
     check(sets.count == 2, "두 valid 세트 로드됨")
     check(sets.contains(where: { $0.name == "emoji-faces" }), "emoji-faces 포함")
     check(sets.contains(where: { $0.name == "emoji-stars" }), "emoji-stars 포함")
     try? FileManager.default.removeItem(at: root)
 }
 
-suite("CharacterSetLoader — 깨진 JSON 스킵") {
+suite("IconSetLoader — 깨진 JSON 스킵") {
     let root = uniqueTempDir("skip-invalid")
     writeSet(in: root, name: "valid", json: #"{"name":"valid","type":"emoji","frames":{"chill":"😎","normal":"🙂","busy":"😰","danger":"🥵","burn":"🔥"}}"#)
     writeSet(in: root, name: "invalid", json: "{ not valid json")
-    let sets = CharacterSetLoader(rootURL: root).loadAll()
+    let sets = IconSetLoader(rootURL: root).loadAll()
     check(sets.count == 1, "깨진 json 스킵 → 1개만 로드")
     check(sets[0].name == "valid", "valid 세트만 살아남음")
     try? FileManager.default.removeItem(at: root)
 }
 
-suite("CharacterSetLoader — PNG 세트 folderURL 채워짐") {
+suite("IconSetLoader — PNG 세트 folderURL 채워짐") {
     let root = uniqueTempDir("png-folder")
     writeSet(in: root, name: "my-claude-stars", json: #"{"name":"my-claude-stars","type":"png","frames":{"chill":"chill.png","normal":"normal.png","busy":"busy.png","danger":"danger.png","burn":"burn.png"}}"#)
-    let sets = CharacterSetLoader(rootURL: root).loadAll()
+    let sets = IconSetLoader(rootURL: root).loadAll()
     check(sets.count == 1, "png 세트 1개 로드")
     check(sets[0].folderURL != nil, "png 세트의 folderURL 채워짐")
     check(sets[0].folderURL!.lastPathComponent == "my-claude-stars", "folderURL이 해당 폴더를 가리킴")
     try? FileManager.default.removeItem(at: root)
 }
 
-suite("CharacterSetLoader — 빈 루트 → 빈 배열") {
+suite("IconSetLoader — 빈 루트 → 빈 배열") {
     let root = uniqueTempDir("empty-root")
-    check(CharacterSetLoader(rootURL: root).loadAll().count == 0, "빈 폴더 → 빈 배열")
+    check(IconSetLoader(rootURL: root).loadAll().count == 0, "빈 폴더 → 빈 배열")
     try? FileManager.default.removeItem(at: root)
 }
 
