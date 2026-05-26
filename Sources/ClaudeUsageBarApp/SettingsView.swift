@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import ClaudeUsageBarCore
 
-/// 컷오프 / 폴링 주기 / 세션키 재등록을 위한 설정 창.
+/// 컷오프 / 폴링 주기 / Plan 선택을 위한 설정 창.
 /// AppDelegate가 `SettingsView.present(...)`를 호출.
 @MainActor
 enum SettingsView {
@@ -10,8 +10,7 @@ enum SettingsView {
 
     static func present(
         current: Config,
-        onSave: @escaping (Config) -> Void,
-        onResetSessionKey: @escaping () -> Void
+        onSave: @escaping (Config) -> Void
     ) {
         if let existing = window {
             NSApp.activate(ignoringOtherApps: true)
@@ -25,17 +24,13 @@ enum SettingsView {
                 onSave(updated)
                 Self.close()
             },
-            onResetSessionKey: {
-                onResetSessionKey()
-                Self.close()
-            },
             onCancel: { Self.close() }
         )
         let hosting = NSHostingController(rootView: rootView)
         let win = NSWindow(contentViewController: hosting)
         win.title = "Claude Usage Bar — 설정"
         win.styleMask = [.titled, .closable]
-        win.setContentSize(NSSize(width: 480, height: 460))
+        win.setContentSize(NSSize(width: 480, height: 520))
         win.center()
         win.isReleasedWhenClosed = false
         win.level = .floating
@@ -54,7 +49,6 @@ enum SettingsView {
 private struct SettingsRootView: View {
     let initial: Config
     let onSave: (Config) -> Void
-    let onResetSessionKey: () -> Void
     let onCancel: () -> Void
 
     @State private var chillMax: Double
@@ -64,16 +58,15 @@ private struct SettingsRootView: View {
     @State private var pollIntervalSec: Double
     @State private var showPercent: Bool
     @State private var showTimeLeft: Bool
+    @State private var plan: ClaudePlan
 
     init(
         initial: Config,
         onSave: @escaping (Config) -> Void,
-        onResetSessionKey: @escaping () -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.initial = initial
         self.onSave = onSave
-        self.onResetSessionKey = onResetSessionKey
         self.onCancel = onCancel
         _chillMax = State(initialValue: Double(initial.thresholds.chillMax))
         _normalMax = State(initialValue: Double(initial.thresholds.normalMax))
@@ -82,6 +75,7 @@ private struct SettingsRootView: View {
         _pollIntervalSec = State(initialValue: Double(initial.pollIntervalSec))
         _showPercent = State(initialValue: initial.showPercentInMenubar)
         _showTimeLeft = State(initialValue: initial.showTimeLeftInMenubar)
+        _plan = State(initialValue: initial.plan)
     }
 
     var body: some View {
@@ -89,6 +83,24 @@ private struct SettingsRootView: View {
             Text("설정")
                 .font(.title2)
                 .fontWeight(.bold)
+
+            // Plan
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Claude 구독 Plan")
+                    .font(.headline)
+                Picker("", selection: $plan) {
+                    ForEach(ClaudePlan.allCases, id: \.self) { p in
+                        Text(p.displayName).tag(p)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                Text("선택한 plan의 기본 토큰 한도가 자동 적용됩니다.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Divider()
 
             // 컷오프
             VStack(alignment: .leading, spacing: 6) {
@@ -124,11 +136,6 @@ private struct SettingsRootView: View {
                 Toggle("남은 시간 표시", isOn: $showTimeLeft)
             }
 
-            Divider()
-
-            // 세션키 재등록
-            Button("🔑 세션키 재등록…", action: onResetSessionKey)
-
             HStack {
                 Spacer()
                 Button("취소", action: onCancel)
@@ -144,6 +151,8 @@ private struct SettingsRootView: View {
                     updated.pollIntervalSec = Int(pollIntervalSec)
                     updated.showPercentInMenubar = showPercent
                     updated.showTimeLeftInMenubar = showTimeLeft
+                    updated.plan = plan                              // NEW
+                    updated.customLimits = nil                       // NEW — Settings UI에서 변경했으면 customLimits 리셋
                     onSave(updated)
                 }
                 .keyboardShortcut(.defaultAction)

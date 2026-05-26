@@ -30,7 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         loader      = IconSetLoader(rootURL: IconSetLoader.defaultRootURL)
         engine      = AnimationEngine()
         engine.statusItem = statusItem
-        poller = UsagePoller(keyManager: keyManager)
+        poller = UsagePoller(scanner: UsageScanner(), limits: .pro)
         // UsagePoller 콜백은 임의 스레드에서 호출 → MainActor 홉
         poller.onUpdate = { [weak self] usage in
             Task { @MainActor in self?.handleUpdate(usage) }
@@ -70,20 +70,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         engine.use(thresholds: config.thresholds)
         engine.use(showPercent: config.showPercentInMenubar, showTimeLeft: config.showTimeLeftInMenubar)
         if let s = activeSet { engine.use(set: s) }
+        poller.limits = config.effectiveLimits     // NEW — 디스크에서 로드한 config의 plan 반영
         engine.showStatus(text: "loading…")
         rebuildMenu()
     }
 
     @MainActor
     private func startPolling() {
-        if keyManager.load() == nil {
-            engine.showStatus(text: "⚠ 세션키 등록")
-            SessionKeyEntryView.present { [weak self] key in
-                try? self?.keyManager.save(key)
-                self?.poller.start(intervalSec: self?.config.pollIntervalSec ?? 60)
-            }
-            return
-        }
         poller.start(intervalSec: config.pollIntervalSec)
     }
 
@@ -98,12 +91,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func handleError(_ err: PollError) {
         switch err {
-        case .noSessionKey, .sessionExpired:
-            engine.showStatus(text: "⚠ 세션키")
-        case .network:
-            engine.showStatus(text: "🔌")
-        case .schemaChanged:
-            engine.showStatus(text: "❓ API")
+        case .noClaudeData:
+            engine.showStatus(text: "📂 데이터 없음")
+        case .ioError:
+            engine.showStatus(text: "🔌 IO")
+        case .parseError:
+            engine.showStatus(text: "❓ 파싱")
         }
         rebuildMenu()
     }
@@ -122,9 +115,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     current: self.config,
                     onSave: { [weak self] updated in
                         self?.handleConfigSave(updated)
-                    },
-                    onResetSessionKey: { [weak self] in
-                        self?.handleResetSessionKey()
                     }
                 )
             },
@@ -154,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         try? configStore.save(updated)
         engine.use(thresholds: updated.thresholds)
         engine.use(showPercent: updated.showPercentInMenubar, showTimeLeft: updated.showTimeLeftInMenubar)
+        poller.limits = updated.effectiveLimits     // NEW — plan 변경 즉시 반영
         // 다음 폴링부터 새 주기 적용
         poller.start(intervalSec: updated.pollIntervalSec)
         rebuildMenu()

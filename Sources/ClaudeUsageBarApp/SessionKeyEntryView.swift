@@ -4,6 +4,9 @@ import ClaudeUsageBarCore
 
 /// 첫 실행 또는 세션키 재등록 시 표시되는 paste 창.
 /// 사용자가 claude.ai sessionKey를 붙여넣고 "저장"을 누르면 onSubmit 호출.
+///
+/// - Note: T15에서 ccusage 패턴으로 전환하면서 현재는 미사용. claude.ai Cloudflare 차단으로
+///   sessionKey 기반 API 호출이 불가능해진 결과. v2 WKWebView 패턴 도입 시 재활용 가능.
 @MainActor
 enum SessionKeyEntryView {
     private static var window: NSWindow?

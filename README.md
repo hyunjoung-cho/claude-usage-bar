@@ -8,7 +8,9 @@ macOS 메뉴바에서 Claude.ai 사용량을 실시간으로 추적하는 위젯
 
 - **메뉴바 위젯** : 상단 우측에 `🌟 42% · 3h 12m` 형태로 사용량 표시
 - **5단계 애니메이션** : 사용률에 따라 정적 → 꿈틀 → 펄쩍 → 격렬 단계별 캐릭터 애니메이션
-- **실시간 동기화** : 5분마다 claude.ai 비공식 internal API로 사용량 폴링
+- **실시간 동기화** : 5분마다 **Claude Code 로컬 JSONL 파싱** (`~/.claude/projects/*/*.jsonl`)
+- **5시간 윈도우 / 7일 윈도우 / Opus 전용 윈도우** 각각 표시
+- claude.ai 채팅 사용량은 추후 v2 (WKWebView 패턴)에서 지원 예정 — 현재는 Claude Code 사용량 전용
 - **자동 실행** : LaunchAgent 등록 후 로그인할 때마다 자동 기동
 - **커스터마이징** : 캐릭터셋 변경, 애니메이션 단계별 컷오프 조정 가능
 
@@ -28,14 +30,9 @@ make bundle install autostart
 
 ## 첫 실행
 
-1. 설치 후 메뉴바 우상단에 `⚠ 세션키 등록` 표시
-2. 메뉴바 아이콘 클릭 → 입력창 팝업
-3. claude.ai 로그인 → 브라우저 개발자도구 (Cmd+Opt+I) 열기
-4. **Application** 탭 → **Cookies** → `sessionKey` 값 복사
-5. 입력창에 붙여넣기 → 저장
-6. 약 5초 후 사용량이 메뉴바에 표시되기 시작
-
-> Keychain 권한 팝업이 나타나면 "Always Allow" 선택
+1. `make bundle install autostart` 한 줄로 메뉴바에 등장
+2. 메뉴바 우클릭 → ⚙️ 설정… → Claude 구독 Plan 선택 (Pro / Max 5x / Max 20x)
+3. 약 60초 후 첫 사용량 표시 시작 (`~/.claude/projects/` 디렉토리 스캔)
 
 ---
 
@@ -123,10 +120,10 @@ sets/my-faces/
 | 증상 | 원인 | 해결 방법 |
 |---|---|---|
 | 메뉴바 아이콘이 안 보임 | LaunchAgent 미등록 또는 .app 설치 실패 | `make install autostart` 다시 실행 |
-| `⚠ 세션키 등록` 계속 표시됨 | Keychain에 저장된 키가 없거나 잘못됨 | 우클릭 → **설정** → 세션키 재등록 |
-| "Always Allow" Keychain 팝업 반복 | 첫 접근 시 macOS 보안 정책 | "Always Allow" 선택 후 앱 재시작 |
-| 사용량이 5분 이상 업데이트 안 됨 | 네트워크 오류 또는 claude.ai 스키마 변경 | 로그 확인 : `tail -f ~/Library/Logs/ClaudeUsageBar.log` |
-| 메뉴에 `❓ API` 표시됨 | claude.ai API 응답 구조 변경 | UsageData struct 수정 필요 (하단 개발 섹션 참조) |
+| `📂 데이터 없음` 표시됨 | `~/.claude/projects/` 디렉토리 부재 | Claude Code를 한 번도 안 썼거나 `~/.claude`가 다른 위치 → Claude Code 한 번 사용 후 재시도 |
+| `❓ 파싱` 표시됨 | JSONL 한 줄이 잘못된 형식 | 로그 확인 : `tail -f ~/Library/Logs/ClaudeUsageBar.log` |
+| `🔌 IO` 표시됨 | 디스크 IO 실패 | 권한 문제 (보통 발생 안 함) — 로그 확인 |
+| 사용량이 업데이트 안 됨 | 폴링 주기 경과 전 또는 JSONL 파싱 오류 | 로그 확인 : `tail -f ~/Library/Logs/ClaudeUsageBar.log` |
 | 캐릭터셋이 메뉴에 안 보임 | `set.json` 누락 또는 JSON 문법 오류 | `~/Library/Application Support/ClaudeUsageBar/sets/<폴더>/set.json` 점검 |
 | 빌드 실패 (Swift version 오류) | Xcode Command Line Tools 구버전 | `xcode-select --install` 후 재시도 |
 | LaunchAgent가 실행 안 됨 | .plist 경로 오류 또는 권한 부족 | `launchctl list \| grep claude-usage-bar` 확인, 필요 시 `make uninstall autostart` 재등록 |
@@ -197,11 +194,10 @@ claude-usage-bar/
 
 ## 미해결 / 후순위 작업
 
-- **[T15]** claude.ai 비공식 API endpoint 스키마 모니터링 → UsageData struct 동기화
-- **[T18]** 5단계 애니메이션 시각 검증, 401 에러 사이클 처리
+- **[T18]** 5단계 애니메이션 시각 검증, IO 에러 사이클 처리
 - **PNG 캐릭터셋** 5장 발주 (Nano Banana Pro 또는 fal.ai)
 - **슬랙 알림** (90%, 95% 도달 시) — v2 계획
-- **ccusage 패턴 통합** (Claude Code JSONL 로컬 파싱) — v2 계획
+- **v2 : WKWebView 패턴**으로 claude.ai 채팅 사용량 통합 — claude.ai Cloudflare bot challenge로 API 직접 호출 불가능하여 현재는 Claude Code 사용량 전용
 
 ---
 
