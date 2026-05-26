@@ -38,14 +38,4 @@ public enum PollError: Error, Equatable {
     case sessionExpired
     case schemaChanged(String)
     case network(String)
-
-    public static func == (lhs: PollError, rhs: PollError) -> Bool {
-        switch (lhs, rhs) {
-        case (.noSessionKey, .noSessionKey):                          return true
-        case (.sessionExpired, .sessionExpired):                      return true
-        case (.schemaChanged(let a), .schemaChanged(let b)):          return a == b
-        case (.network(let a), .network(let b)):                      return a == b
-        default:                                                       return false
-        }
-    }
 }

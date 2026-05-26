@@ -5,7 +5,14 @@ public final class UsagePoller {
     private let session: URLSession
     private let endpoint: URL
 
+    /// 폴링 성공 시 호출됩니다.
+    /// - Warning: 콜백은 임의 스레드에서 호출됩니다. AppKit/SwiftUI 업데이트는 반드시
+    ///   `DispatchQueue.main.async` 또는 `@MainActor`로 감싸세요.
     public var onUpdate: ((UsageData) -> Void)?
+
+    /// 폴링 실패 시 호출됩니다.
+    /// - Warning: 콜백은 임의 스레드에서 호출됩니다. AppKit/SwiftUI 업데이트는 반드시
+    ///   `DispatchQueue.main.async` 또는 `@MainActor`로 감싸세요.
     public var onError:  ((PollError) -> Void)?
 
     private var timer: Timer?

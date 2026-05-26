@@ -2,6 +2,10 @@ import Foundation
 
 /// URLSession test helper — register as `URLSessionConfiguration.protocolClasses`
 /// and set `MockURLProtocol.responder` to a closure that returns (HTTPURLResponse, Data).
+///
+/// - Warning: Test helper only. Do NOT register in production `URLSessionConfiguration`.
+///   Lives in the Core module because the B안 (CoreTestRunner) architecture has no
+///   separate test target.
 public final class MockURLProtocol: URLProtocol {
     public static var responder: ((URLRequest) -> (HTTPURLResponse, Data))?
     public static func reset() { responder = nil }
