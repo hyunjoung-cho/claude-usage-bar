@@ -32,7 +32,14 @@ final class ClaudeWebScraper: NSObject {
     override init() {
         let config = WKWebViewConfiguration()
         // 영구 cookie/세션 저장 — 한 번 로그인하면 다음 실행도 유지
-        config.websiteDataStore = WKWebsiteDataStore.default()
+        // macOS 14+ : 명시적 영구 데이터스토어 (UUID 기반).
+        // default() 는 LSUIElement 앱에서 비영속으로 동작할 수 있어서 cookie persistence 보장 안 됨.
+        let storeID = UUID(uuidString: "B7E1A1F0-DA00-4C0F-AAAA-C1A4DE05A9E0")!
+        if #available(macOS 14.0, *) {
+            config.websiteDataStore = WKWebsiteDataStore(forIdentifier: storeID)
+        } else {
+            config.websiteDataStore = WKWebsiteDataStore.default()
+        }
         webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700), configuration: config)
         super.init()
         webView.navigationDelegate = self
@@ -63,9 +70,19 @@ final class ClaudeWebScraper: NSObject {
         loginWindow?.orderOut(nil)
     }
 
+    private func dumpCookies(tag: String) {
+        let store = webView.configuration.websiteDataStore.httpCookieStore
+        store.getAllCookies { cookies in
+            let claudeCookies = cookies.filter { $0.domain.contains("claude.ai") }
+            let names = claudeCookies.map { $0.name }.sorted()
+            NSLog("[scraper:\(tag)] claude.ai cookies count=\(claudeCookies.count) names=\(names.prefix(10))")
+        }
+    }
+
     /// 사용량 페이지를 한 번 scrape. polling 호출자가 60초마다 사용.
     func fetchOnce(completion: @escaping (Result<ScrapedUsage, ScrapeError>) -> Void) {
         NSLog("[scraper] fetchOnce called, current URL=\(webView.url?.absoluteString ?? "nil")")
+        dumpCookies(tag: "before-fetch")
         guard pending == nil else {
             NSLog("[scraper] previous fetch still pending — returning .timeout")
             completion(.failure(.timeout))
@@ -97,6 +114,7 @@ extension ClaudeWebScraper: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         let urlStr = webView.url?.absoluteString ?? ""
         NSLog("[scraper] didFinish navigation, URL=\(urlStr)")
+        dumpCookies(tag: "didFinish")
 
         // 1) Login/sign-in 페이지로 도달 = 세션 없음. 즉시 notLoggedIn.
         let lower = urlStr.lowercased()
