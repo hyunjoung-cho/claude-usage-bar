@@ -100,8 +100,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .success(let scraped):
                     // 5h 못 잡으면 weekly → opus 순으로 fallback
                     if let pct = scraped.fiveHourPercent ?? scraped.weeklyPercent ?? scraped.opusPercent {
-                        // 시간 잔여는 페이지에서 못 가져옴 — 0 전달
-                        self.engine.update(percent: pct, timeLeftSec: 0)
+                        let leftSec = scraped.fiveHourResetSec ?? 0
+                        self.engine.update(percent: pct, timeLeftSec: leftSec)
                         self.rebuildMenuFromScraped(scraped)
                     } else {
                         self.engine.showStatus(text: "❓ 페이지")

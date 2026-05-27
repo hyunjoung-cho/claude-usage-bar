@@ -19,6 +19,7 @@ final class ClaudeWebScraper: NSObject {
         let fiveHourPercent: Int?
         let weeklyPercent:   Int?
         let opusPercent:     Int?
+        let fiveHourResetSec: Int?       // NEW — 5h block reset까지 남은 초
     }
 
     enum ScrapeError: Error {
@@ -174,10 +175,13 @@ extension ClaudeWebScraper: WKNavigationDelegate {
                     guard let p = self.pending else { return }
                     self.pending = nil
                     self.hardTimeoutWork?.cancel()
+                    let resetSec = self.extractFiveHourResetSec(from: text)
+                    NSLog("[scraper] reset time : 5h resetSec=\(resetSec ?? -1)")
                     p(.success(ScrapedUsage(
                         fiveHourPercent: extracted.fiveHour,
                         weeklyPercent:   extracted.weekly,
-                        opusPercent:     extracted.opus
+                        opusPercent:     extracted.opus,
+                        fiveHourResetSec: resetSec
                     )))
                     return
                 }
@@ -253,6 +257,39 @@ extension ClaudeWebScraper: WKNavigationDelegate {
             weekly:   firstMatch(weeklyPatterns),
             opus:     firstMatch(opusPatterns)
         )
+    }
+
+    /// "현재 세션" 섹션의 "X시간 Y분 후 재설정" → 총 초로 환산.
+    /// 시간만(X시간)/분만(Y분)도 케이스별 지원.
+    private func extractFiveHourResetSec(from text: String) -> Int? {
+        // "현재 세션" 라벨 부근에서만 검색 (다른 윈도우의 reset 시간과 섞이지 않도록)
+        let scopePattern = #"현재 세션[\s\S]{0,300}?재설정"#
+        guard let scopeRange = text.range(of: scopePattern, options: [.regularExpression]) else {
+            return nil
+        }
+        let scope = String(text[scopeRange])
+
+        // 시간 + 분 함께
+        if let m = scope.range(of: #"(\d+)\s*시간\s*(\d+)\s*분"#, options: .regularExpression) {
+            let s = String(scope[m])
+            let nums = s.components(separatedBy: CharacterSet.decimalDigits.inverted).compactMap { Int($0) }
+            if nums.count >= 2 { return nums[0] * 3600 + nums[1] * 60 }
+        }
+        // 시간만
+        if let m = scope.range(of: #"(\d+)\s*시간"#, options: .regularExpression) {
+            let s = String(scope[m])
+            if let n = s.components(separatedBy: CharacterSet.decimalDigits.inverted).compactMap({ Int($0) }).first {
+                return n * 3600
+            }
+        }
+        // 분만
+        if let m = scope.range(of: #"(\d+)\s*분"#, options: .regularExpression) {
+            let s = String(scope[m])
+            if let n = s.components(separatedBy: CharacterSet.decimalDigits.inverted).compactMap({ Int($0) }).first {
+                return n * 60
+            }
+        }
+        return nil
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
