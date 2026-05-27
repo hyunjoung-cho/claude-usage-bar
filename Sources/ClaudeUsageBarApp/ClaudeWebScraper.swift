@@ -11,6 +11,7 @@ final class ClaudeWebScraper: NSObject {
     private var loginWindow: NSWindow?
     private var pending: ((Result<ScrapedUsage, ScrapeError>) -> Void)?
     private var loadStartedAt: Date?
+    private var hardTimeoutWork: DispatchWorkItem?
 
     /// 페이지에서 추출한 사용량.
     /// 우리가 잡을 수 있는 건 5h / weekly / opus 세 가지 %, 가능한 것만 채움.
@@ -64,13 +65,29 @@ final class ClaudeWebScraper: NSObject {
 
     /// 사용량 페이지를 한 번 scrape. polling 호출자가 60초마다 사용.
     func fetchOnce(completion: @escaping (Result<ScrapedUsage, ScrapeError>) -> Void) {
+        NSLog("[scraper] fetchOnce called, current URL=\(webView.url?.absoluteString ?? "nil")")
         guard pending == nil else {
-            // 이전 fetch 진행 중 — drop
+            NSLog("[scraper] previous fetch still pending — returning .timeout")
             completion(.failure(.timeout))
             return
         }
         pending = completion
         loadStartedAt = Date()
+
+        // 15초 hard timeout — didFinish 영원히 안 오는 경우 대비
+        hardTimeoutWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            Task { @MainActor in
+                guard let p = self.pending else { return }
+                NSLog("[scraper] hard timeout 15s — pending released")
+                self.pending = nil
+                p(.failure(.timeout))
+            }
+        }
+        hardTimeoutWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: work)
+
         let url = URL(string: "https://claude.ai/settings/usage")!
         webView.load(URLRequest(url: url))
     }
@@ -78,6 +95,7 @@ final class ClaudeWebScraper: NSObject {
 
 extension ClaudeWebScraper: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        NSLog("[scraper] didFinish navigation, URL=\(webView.url?.absoluteString ?? "nil")")
         // SPA라서 페이지 마운트 후 데이터 fetch + 렌더에 시간 걸림.
         // 최대 8초 polling으로 DOM에서 % 추출 시도.
         let js = """
@@ -141,17 +159,21 @@ extension ClaudeWebScraper: WKNavigationDelegate {
             guard let self = self else { return }
             guard let pending = self.pending else { return }
             self.pending = nil
+            self.hardTimeoutWork?.cancel()
 
             switch result {
             case .success(let value):
+                NSLog("[scraper] JS success: \(String(describing: value).prefix(200))")
                 guard let dict = value as? [String: Any], let status = dict["status"] as? String else {
                     pending(.failure(.js("unexpected result shape")))
                     return
                 }
                 switch status {
                 case "notLoggedIn":
+                    NSLog("[scraper] status=notLoggedIn")
                     pending(.failure(.notLoggedIn))
                 case "ok", "partial":
+                    NSLog("[scraper] status=\(status), fiveHour=\(dict["fiveHour"] ?? "nil")")
                     let usage = ScrapedUsage(
                         fiveHourPercent: dict["fiveHour"] as? Int,
                         weeklyPercent:   dict["weekly"]   as? Int,
@@ -160,23 +182,28 @@ extension ClaudeWebScraper: WKNavigationDelegate {
                     pending(.success(usage))
                 case "empty":
                     let dump = (dict["dump"] as? String) ?? ""
-                    NSLog("[ClaudeUsageBar] scrape empty, page dump: \(dump.prefix(300))")
+                    NSLog("[scraper] status=empty, page dump: \(dump.prefix(1000))")
                     pending(.failure(.domEmpty))
                 default:
                     pending(.failure(.js("unknown status: \(status)")))
                 }
             case .failure(let err):
+                NSLog("[scraper] JS error: \(err.localizedDescription)")
                 pending(.failure(.js(err.localizedDescription)))
             }
         }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        NSLog("[scraper] didFail navigation: \(error.localizedDescription)")
+        hardTimeoutWork?.cancel()
         pending?(.failure(.navigation(error.localizedDescription)))
         pending = nil
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        NSLog("[scraper] didFailProvisional: \(error.localizedDescription)")
+        hardTimeoutWork?.cancel()
         pending?(.failure(.navigation(error.localizedDescription)))
         pending = nil
     }
