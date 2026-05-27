@@ -98,7 +98,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 switch result {
                 case .success(let scraped):
-                    if let pct = scraped.fiveHourPercent {
+                    // 5h 못 잡으면 weekly → opus 순으로 fallback
+                    if let pct = scraped.fiveHourPercent ?? scraped.weeklyPercent ?? scraped.opusPercent {
                         // 시간 잔여는 페이지에서 못 가져옴 — 0 전달
                         self.engine.update(percent: pct, timeLeftSec: 0)
                         self.rebuildMenuFromScraped(scraped)

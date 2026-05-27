@@ -166,6 +166,11 @@ extension ClaudeWebScraper: WKNavigationDelegate {
 
                 if extracted.fiveHour != nil || extracted.weekly != nil || extracted.opus != nil {
                     NSLog("[scraper] poll success: 5h=\(extracted.fiveHour ?? -1) weekly=\(extracted.weekly ?? -1) opus=\(extracted.opus ?? -1)")
+                    // 첫 성공 사이클에서 page dump 파일 저장 — selector tuning용 (NSLog 1024자 제한 우회)
+                    let dumpPath = NSHomeDirectory() + "/Library/Logs/ClaudeUsageBarPageDump.txt"
+                    let dumpContent = "[scraper] page dump (first 3000ch) at \(Date()):\n\(text.prefix(3000))\n"
+                    try? dumpContent.write(toFile: dumpPath, atomically: true, encoding: .utf8)
+                    NSLog("[scraper] page dump saved → \(dumpPath)")
                     guard let p = self.pending else { return }
                     self.pending = nil
                     self.hardTimeoutWork?.cancel()
