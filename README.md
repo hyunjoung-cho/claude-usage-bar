@@ -8,9 +8,9 @@ macOS 메뉴바에서 Claude.ai 사용량을 실시간으로 추적하는 위젯
 
 - **메뉴바 위젯** : 상단 우측에 `🌟 42% · 3h 12m` 형태로 사용량 표시
 - **5단계 애니메이션** : 사용률에 따라 정적 → 꿈틀 → 펄쩍 → 격렬 단계별 캐릭터 애니메이션
-- **실시간 동기화** : 5분마다 **Claude Code 로컬 JSONL 파싱** (`~/.claude/projects/*/*.jsonl`)
+- **실시간 동기화** : 설정된 주기(기본 60초)마다 **WKWebView로 claude.ai 페이지 직접 scrape** (진짜 데이터)
 - **5시간 윈도우 / 7일 윈도우 / Opus 전용 윈도우** 각각 표시
-- claude.ai 채팅 사용량은 추후 v2 (WKWebView 패턴)에서 지원 예정 — 현재는 Claude Code 사용량 전용
+- Cloudflare bot challenge 자동 통과 — 진짜 브라우저(WKWebView)를 사용하므로 차단 없음
 - **자동 실행** : LaunchAgent 등록 후 로그인할 때마다 자동 기동
 - **커스터마이징** : 캐릭터셋 변경, 애니메이션 단계별 컷오프 조정 가능
 
@@ -31,8 +31,9 @@ make bundle install autostart
 ## 첫 실행
 
 1. `make bundle install autostart` 한 줄로 메뉴바에 등장
-2. 메뉴바 우클릭 → ⚙️ 설정… → Claude 구독 Plan 선택 (Pro / Max 5x / Max 20x)
-3. 약 60초 후 첫 사용량 표시 시작 (`~/.claude/projects/` 디렉토리 스캔)
+2. **🔑 로그인 윈도우 자동 등장** → Google 또는 이메일로 claude.ai 로그인
+3. 로그인 완료 후 윈도우 닫으면 다음 polling에서 자동으로 사용량 표시 시작
+4. 이후 세션은 영구 저장 — 재시작해도 다시 로그인 불필요
 
 ---
 
@@ -120,10 +121,13 @@ sets/my-faces/
 | 증상 | 원인 | 해결 방법 |
 |---|---|---|
 | 메뉴바 아이콘이 안 보임 | LaunchAgent 미등록 또는 .app 설치 실패 | `make install autostart` 다시 실행 |
-| `📂 데이터 없음` 표시됨 | `~/.claude/projects/` 디렉토리 부재 | Claude Code를 한 번도 안 썼거나 `~/.claude`가 다른 위치 → Claude Code 한 번 사용 후 재시도 |
-| `❓ 파싱` 표시됨 | JSONL 한 줄이 잘못된 형식 | 로그 확인 : `tail -f ~/Library/Logs/ClaudeUsageBar.log` |
-| `🔌 IO` 표시됨 | 디스크 IO 실패 | 권한 문제 (보통 발생 안 함) — 로그 확인 |
-| 사용량이 업데이트 안 됨 | 폴링 주기 경과 전 또는 JSONL 파싱 오류 | 로그 확인 : `tail -f ~/Library/Logs/ClaudeUsageBar.log` |
+| `🔑 로그인` 표시됨 | 첫 실행 또는 세션 만료 | 자동으로 뜨는 로그인 윈도우에서 Google/이메일로 로그인 |
+| `❓ 페이지` 표시됨 | 페이지 구조가 selector와 다름 | 로그에서 page dump 500자 확인 : `tail -f ~/Library/Logs/ClaudeUsageBar.log` |
+| `❓ DOM` 표시됨 | 페이지 로드됐으나 % 못 찾음 | 로그 page dump 확인 후 selector 조정 |
+| `🔌 web` 표시됨 | 네트워크 오류 또는 JS 실행 실패 | 인터넷 연결 확인, 로그 확인 |
+| `📂 데이터 없음` 표시됨 | (v2 fallback) `~/.claude/projects/` 부재 | WKWebView 모드에서는 발생 안 함 |
+| `❓ 파싱` 표시됨 | (v2 fallback) JSONL 파싱 오류 | 로그 확인 : `tail -f ~/Library/Logs/ClaudeUsageBar.log` |
+| 사용량이 업데이트 안 됨 | 폴링 주기 경과 전 또는 네트워크 문제 | 로그 확인 : `tail -f ~/Library/Logs/ClaudeUsageBar.log` |
 | 캐릭터셋이 메뉴에 안 보임 | `set.json` 누락 또는 JSON 문법 오류 | `~/Library/Application Support/ClaudeUsageBar/sets/<폴더>/set.json` 점검 |
 | 빌드 실패 (Swift version 오류) | Xcode Command Line Tools 구버전 | `xcode-select --install` 후 재시도 |
 | LaunchAgent가 실행 안 됨 | .plist 경로 오류 또는 권한 부족 | `launchctl list \| grep claude-usage-bar` 확인, 필요 시 `make uninstall autostart` 재등록 |
@@ -196,8 +200,9 @@ claude-usage-bar/
 
 - **[T18]** 5단계 애니메이션 시각 검증, IO 에러 사이클 처리
 - **PNG 캐릭터셋** 5장 발주 (Nano Banana Pro 또는 fal.ai)
-- **슬랙 알림** (90%, 95% 도달 시) — v2 계획
-- **v2 : WKWebView 패턴**으로 claude.ai 채팅 사용량 통합 — claude.ai Cloudflare bot challenge로 API 직접 호출 불가능하여 현재는 Claude Code 사용량 전용
+- **슬랙 알림** (90%, 95% 도달 시) — 후순위
+- **selector 정확도** — 실제 claude.ai/settings/usage 페이지 구조에 따라 정규식 조정 필요할 수 있음. 로그 page dump 확인 후 `ClaudeWebScraper.swift` patterns 수정
+- **시간 잔여 표시** — WKWebView scrape 시 timeLeftSec=0 전달 (페이지에서 파싱 미구현), 메뉴 "0m 남음" 표시됨
 
 ---
 

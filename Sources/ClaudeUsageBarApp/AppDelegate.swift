@@ -7,9 +7,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var configStore: ConfigStore!
     private var keyManager:  SessionKeyManager!
     private var loader:      IconSetLoader!
-    private var poller:      UsagePoller!
+    private var poller:      UsagePoller!    // v2 fallback 보존 — 현재 미사용
     private var engine:      AnimationEngine!
     private var menuBuilder: MenuBuilder!
+    private var webScraper:  ClaudeWebScraper!
 
     private var config: Config = .default
     private var sets:   [IconSet] = []
@@ -30,14 +31,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         loader      = IconSetLoader(rootURL: IconSetLoader.defaultRootURL)
         engine      = AnimationEngine()
         engine.statusItem = statusItem
+        // UsagePoller — v2 fallback 보존 (현재 start 안 함)
         poller = UsagePoller(scanner: UsageScanner(), limits: .pro)
-        // UsagePoller 콜백은 임의 스레드에서 호출 → MainActor 홉
         poller.onUpdate = { [weak self] usage in
             Task { @MainActor in self?.handleUpdate(usage) }
         }
         poller.onError = { [weak self] err in
             Task { @MainActor in self?.handleError(err) }
         }
+        webScraper = ClaudeWebScraper()
         menuBuilder = MenuBuilder()
     }
 
@@ -75,9 +77,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
     }
 
+    // MARK: - Web Scraper Polling
+
+    private var webPollTimer: Timer?
+
     @MainActor
     private func startPolling() {
-        poller.start(intervalSec: config.pollIntervalSec)
+        webPollTimer?.invalidate()
+        // 설정된 주기(기본 60초)마다 web scrape
+        webPollTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(config.pollIntervalSec), repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.webTick() }
+        }
+        Task { @MainActor in self.webTick() }   // 첫 tick 즉시
+    }
+
+    @MainActor
+    private func webTick() {
+        webScraper.fetchOnce { [weak self] result in
+            guard let self = self else { return }
+            Task { @MainActor in
+                switch result {
+                case .success(let scraped):
+                    if let pct = scraped.fiveHourPercent {
+                        // 시간 잔여는 페이지에서 못 가져옴 — 0 전달
+                        self.engine.update(percent: pct, timeLeftSec: 0)
+                        self.rebuildMenuFromScraped(scraped)
+                    } else {
+                        self.engine.showStatus(text: "❓ 페이지")
+                        self.rebuildMenu()
+                    }
+                case .failure(let err):
+                    switch err {
+                    case .notLoggedIn:
+                        self.engine.showStatus(text: "🔑 로그인")
+                        self.webScraper.showLoginWindow()
+                    case .domEmpty:
+                        self.engine.showStatus(text: "❓ DOM")
+                    case .timeout, .js, .navigation:
+                        self.engine.showStatus(text: "🔌 web")
+                    }
+                    self.rebuildMenu()
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func rebuildMenuFromScraped(_ s: ClaudeWebScraper.ScrapedUsage) {
+        // 메뉴바 표시용 placeholder UsageData
+        // usedTokens = %, limitTokens = 100 → usedPercent == scrape된 %
+        let now = Date()
+        let placeholder = UsageData(
+            fiveHourWindow: UsageWindow(usedTokens: s.fiveHourPercent ?? 0, limitTokens: 100, resetsAt: now),
+            weeklyWindow:   UsageWindow(usedTokens: s.weeklyPercent   ?? 0, limitTokens: 100, resetsAt: now),
+            opusWindow:     UsageWindow(usedTokens: s.opusPercent     ?? 0, limitTokens: 100, resetsAt: now)
+        )
+        rebuildMenu(usage: placeholder)
     }
 
     @MainActor
@@ -126,7 +181,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func handleRefresh() {
-        poller.start(intervalSec: config.pollIntervalSec)
+        webPollTimer?.invalidate()
+        startPolling()
     }
 
     @MainActor
@@ -145,20 +201,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         try? configStore.save(updated)
         engine.use(thresholds: updated.thresholds)
         engine.use(showPercent: updated.showPercentInMenubar, showTimeLeft: updated.showTimeLeftInMenubar)
-        poller.limits = updated.effectiveLimits     // NEW — plan 변경 즉시 반영
+        poller.limits = updated.effectiveLimits     // v2 fallback 보존
         // 다음 폴링부터 새 주기 적용
-        poller.start(intervalSec: updated.pollIntervalSec)
+        webPollTimer?.invalidate()
+        startPolling()
         rebuildMenu()
     }
 
     @MainActor
     private func handleResetSessionKey() {
         keyManager.delete()
-        poller.stop()
+        webPollTimer?.invalidate()
         engine.showStatus(text: "⚠ 세션키 등록")
         SessionKeyEntryView.present { [weak self] key in
             try? self?.keyManager.save(key)
-            self?.poller.start(intervalSec: self?.config.pollIntervalSec ?? 60)
+            self?.startPolling()
         }
     }
 }
