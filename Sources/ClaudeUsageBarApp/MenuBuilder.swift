@@ -121,34 +121,38 @@ final class MenuBuilder {
     }
 
     private func buildPreviewSubmenu(for set: IconSet, thresholds t: Thresholds) -> NSMenu {
-        let submenu = NSMenu()
-
-        // 단계별 (stage, %범위, 한국어이름)
+        let menu = NSMenu()
         let stages: [(stage: Stage, range: String, label: String)] = [
-            (.chill,  "0-\(t.chillMax)%",                       "여유"),
-            (.normal, "\(t.chillMax)-\(t.normalMax)%",          "보통"),
-            (.busy,   "\(t.normalMax)-\(t.busyMax)%",           "임박"),
-            (.danger, "\(t.busyMax)-\(t.dangerMax)%",           "위험"),
-            (.burn,   "\(t.dangerMax)-100%",                    "불탐"),
+            (.chill,  "0-\(t.chillMax)%",                  "여유"),
+            (.normal, "\(t.chillMax)-\(t.normalMax)%",     "보통"),
+            (.busy,   "\(t.normalMax)-\(t.busyMax)%",      "임박"),
+            (.danger, "\(t.busyMax)-\(t.dangerMax)%",      "위험"),
+            (.burn,   "\(t.dangerMax)-100%",               "불탐"),
         ]
-
         for (stage, range, label) in stages {
-            let glyph: String
+            let rangeLabel = "\(range.padding(toLength: 10, withPad: " ", startingAt: 0))\(label)"
+
+            let item: NSMenuItem
             switch set.type {
             case .emoji:
-                glyph = set.value(for: stage)
+                let glyph = set.value(for: stage)
+                item = NSMenuItem(title: "\(glyph)   \(rangeLabel)", action: nil, keyEquivalent: "")
             case .png:
-                // PNG 세트는 submenu에서 파일이름 대신 placeholder 표시
-                glyph = "▢"
+                // GIF/PNG 썸네일을 NSMenuItem.image로 (첫 프레임 정적)
+                item = NSMenuItem(title: "   \(rangeLabel)", action: nil, keyEquivalent: "")
+                if let folder = set.folderURL {
+                    let path = folder.appendingPathComponent(set.value(for: stage))
+                    if let img = NSImage(contentsOf: path) {
+                        img.size = NSSize(width: 20, height: 20)
+                        img.isTemplate = false
+                        item.image = img
+                    }
+                }
             }
-            // "😎  0-40%    여유" — 정렬 위해 padding
-            let paddedRange = range.padding(toLength: 10, withPad: " ", startingAt: 0)
-            let title = "\(glyph)   \(paddedRange)  \(label)"
-            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-            item.isEnabled = false   // 미리보기만, 클릭 비활성
-            submenu.addItem(item)
+            item.isEnabled = false
+            menu.addItem(item)
         }
-        return submenu
+        return menu
     }
 
     @objc private func handleSelectSet(_ sender: NSMenuItem) {
