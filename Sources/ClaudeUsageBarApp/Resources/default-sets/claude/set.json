@@ -1,0 +1,11 @@
+{
+  "name": "claude",
+  "type": "png",
+  "frames": {
+    "chill":  "chill.gif",
+    "normal": "normal.gif",
+    "busy":   "busy.gif",
+    "danger": "danger.gif",
+    "burn":   "burn.gif"
+  }
+}

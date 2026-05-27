@@ -16,10 +16,33 @@ macOS 메뉴바에서 Claude.ai 사용량을 실시간으로 추적하는 위젯
 
 ---
 
+## 🦀 팀원 설치 — Claude Code 한 줄
+
+Claude Code 헤비유저라면 터미널에서 Claude Code에게 이렇게 시키세요 :
+
+> github.com/hyunjoung-cho/claude-usage-bar 클론해서 `make bundle install autostart`로 설치해줘. 끝나면 메뉴바에 뜰 거야.
+
+Claude가 알아서 clone → 빌드 → ~/Applications 설치 → 자동시작 등록까지 합니다.
+
+**왜 코드 서명/Gatekeeper 경고가 없나?** 본인 맥에서 직접 빌드한 .app은 quarantine 속성이 안 붙어서 "확인되지 않은 개발자" 차단을 안 만납니다. Apple Developer 계정 불필요.
+
+### 설치 후 첫 실행
+1. 메뉴바 우상단에 `🔑 로그인` 표시 + claude.ai 로그인 창 자동 등장
+2. 본인 claude.ai 계정으로 로그인 (Google/이메일) — 쿠키는 본인 맥에만 영구 저장
+3. 60초 내 사용량 % 표시 시작
+4. 메뉴바 우클릭 → 🎭 캐릭터셋 → **claude** 선택하면 클로드가 메뉴바에서 꿈틀거림
+
+### 요구사항
+- macOS 14 (Sonoma) 이상
+- Xcode Command Line Tools (`xcode-select --install` — Claude Code가 없으면 안내)
+- claude.ai 언어 설정이 **한국어**여야 사용량 셀렉터가 정확 (영어는 fallback, 검증 미완)
+
+---
+
 ## 빠른 설치
 
 ```bash
-git clone https://github.com/<your-fork>/claude-usage-bar.git
+git clone https://github.com/hyunjoung-cho/claude-usage-bar.git
 cd claude-usage-bar
 make bundle install autostart
 ```
@@ -184,14 +207,11 @@ claude-usage-bar/
 │   │   └── *.swift              (메뉴바 앱 구현)
 │   └── CoreTestRunner/          커스텀 테스트 러너
 │       └── main.swift           (XCTest 대체)
-├── Scripts/
-│   ├── bundle.sh                 .app 번들 생성 스크립트
-│   ├── install.sh                ~/Applications 복사
-│   ├── autostart.sh              LaunchAgent 등록
-│   └── uninstall.sh              전체 제거
-└── launchd/
-    └── com.goldplat.claude-usage-bar.plist
-                                  자동 실행 설정
+└── Scripts/
+    ├── bundle.sh                 .app 번들 생성 스크립트
+    ├── install.sh                ~/Applications 복사
+    ├── autostart.sh              LaunchAgent 동적 생성 + 등록
+    └── uninstall.sh              전체 제거
 ```
 
 ---
