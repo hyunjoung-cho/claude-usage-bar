@@ -133,118 +133,116 @@ extension ClaudeWebScraper: WKNavigationDelegate {
             return
         }
 
-        // 3) /settings/usage 도달. 0.5초 대기 후 JS 평가 (redirect chain 안정화).
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.evaluateScrapeJS(webView: webView)
-        }
+        // 3) /settings/usage 도달. 외부 polling으로 JS 평가 (SPA re-render 무관).
+        evaluateScrapeJS(webView: webView)
     }
 
-    private func evaluateScrapeJS(webView: WKWebView) {
+    private func evaluateScrapeJS(webView: WKWebView, attemptsLeft: Int = 16) {
+        // 단순 동기 JS — Promise 없음, React 재렌더 영향 X
         let js = """
-        new Promise((resolve) => {
-            const deadline = Date.now() + 8000;
-            const extract = () => {
-                const text = (document.body && document.body.innerText) || '';
-                if (/sign in|continue with|로그인/i.test(text) && !/used|사용/i.test(text)) {
-                    resolve({ status: 'notLoggedIn' });
-                    return;
-                }
-                const patterns = {
-                    fiveHour: [
-                        /5[\\s-]*hour[\\s\\S]{0,80}?(\\d+)\\s*%/i,
-                        /(\\d+)\\s*%[\\s\\S]{0,40}?5[\\s-]*hour/i,
-                        /(\\d+)\\s*%[\\s\\S]{0,40}?5시간/,
-                        /5시간[\\s\\S]{0,40}?(\\d+)\\s*%/
-                    ],
-                    weekly: [
-                        /week[ly]*[\\s\\S]{0,80}?(\\d+)\\s*%/i,
-                        /(\\d+)\\s*%[\\s\\S]{0,40}?week[ly]*/i,
-                        /주간[\\s\\S]{0,40}?(\\d+)\\s*%/,
-                        /(\\d+)\\s*%[\\s\\S]{0,40}?주간/
-                    ],
-                    opus: [
-                        /opus[\\s\\S]{0,80}?(\\d+)\\s*%/i,
-                        /(\\d+)\\s*%[\\s\\S]{0,40}?opus/i
-                    ]
-                };
-                const out = { fiveHour: null, weekly: null, opus: null };
-                for (const [key, pats] of Object.entries(patterns)) {
-                    for (const p of pats) {
-                        const m = text.match(p);
-                        if (m) { out[key] = parseInt(m[1]); break; }
-                    }
-                }
-                if (out.fiveHour !== null) {
-                    resolve({ status: 'ok', ...out });
-                    return;
-                }
-                const anyPct = text.match(/(\\d+)\\s*%/);
-                if (anyPct && Date.now() > deadline - 1000) {
-                    resolve({ status: 'partial', fiveHour: parseInt(anyPct[1]), weekly: null, opus: null });
-                    return;
-                }
-                if (Date.now() > deadline) {
-                    resolve({ status: 'empty', dump: text.substring(0, 1000) });
-                    return;
-                }
-                setTimeout(extract, 300);
-            };
-            setTimeout(extract, 300);
-        });
+        (function() {
+            const text = (document.body && document.body.innerText) || '';
+            return text.substring(0, 5000);   // 첫 5KB만 — 충분
+        })();
         """
-        webView.callAsyncJavaScript(js, arguments: [:], in: nil, in: .page) { [weak self] result in
+        webView.evaluateJavaScript(js) { [weak self] result, error in
+            guard let self = self else { return }
             Task { @MainActor in
-                guard let self = self else { return }
-                guard let pending = self.pending else { return }
+                let text = (result as? String) ?? ""
 
-                switch result {
-                case .success(let value):
-                    NSLog("[scraper] JS success: \(String(describing: value).prefix(200))")
-                    // JS Promise가 navigation away로 cancel되면 NSNull 또는 딕셔너리 캐스팅 실패
-                    // → pending 유지, 다음 didFinish에서 재시도
-                    guard let dict = value as? [String: Any] else {
-                        if value is NSNull {
-                            NSLog("[scraper] JS returned NSNull (navigation away) — keeping pending, waiting for next didFinish")
-                        } else {
-                            NSLog("[scraper] JS unexpected shape: \(String(describing: value).prefix(200)) — keeping pending")
-                        }
-                        return
-                    }
-                    guard let status = dict["status"] as? String else {
-                        self.pending = nil
-                        self.hardTimeoutWork?.cancel()
-                        pending(.failure(.js("unexpected result shape: \(String(describing: value))")))
-                        return
-                    }
+                // 로그인 페이지 감지
+                if (text.lowercased().contains("sign in") || text.lowercased().contains("continue with") || text.contains("로그인"))
+                    && !text.lowercased().contains("used") && !text.contains("사용") {
+                    NSLog("[scraper] poll: login page text detected")
+                    guard let p = self.pending else { return }
                     self.pending = nil
                     self.hardTimeoutWork?.cancel()
-                    switch status {
-                    case "notLoggedIn":
-                        NSLog("[scraper] status=notLoggedIn")
-                        pending(.failure(.notLoggedIn))
-                    case "ok", "partial":
-                        NSLog("[scraper] status=\(status), fiveHour=\(dict["fiveHour"] ?? "nil")")
-                        let usage = ScrapedUsage(
-                            fiveHourPercent: dict["fiveHour"] as? Int,
-                            weeklyPercent:   dict["weekly"]   as? Int,
-                            opusPercent:     dict["opus"]     as? Int
-                        )
-                        pending(.success(usage))
-                    case "empty":
-                        let dump = (dict["dump"] as? String) ?? ""
-                        NSLog("[ClaudeUsageBar] scrape empty, page dump: \(dump.prefix(1000))")
-                        pending(.failure(.domEmpty))
-                    default:
-                        pending(.failure(.js("unknown status: \(status)")))
-                    }
-                case .failure(let err):
-                    NSLog("[scraper] JS error: \(err.localizedDescription)")
+                    p(.failure(.notLoggedIn))
+                    return
+                }
+
+                // 5h/weekly/opus % 추출
+                let extracted = self.extractPercents(from: text)
+
+                if extracted.fiveHour != nil || extracted.weekly != nil || extracted.opus != nil {
+                    NSLog("[scraper] poll success: 5h=\(extracted.fiveHour ?? -1) weekly=\(extracted.weekly ?? -1) opus=\(extracted.opus ?? -1)")
+                    guard let p = self.pending else { return }
                     self.pending = nil
                     self.hardTimeoutWork?.cancel()
-                    pending(.failure(.js(err.localizedDescription)))
+                    p(.success(ScrapedUsage(
+                        fiveHourPercent: extracted.fiveHour,
+                        weeklyPercent:   extracted.weekly,
+                        opusPercent:     extracted.opus
+                    )))
+                    return
+                }
+
+                // 아직 % 못 찾음 — 재시도 또는 timeout
+                if attemptsLeft > 0 {
+                    // 0.5초 후 재시도, 최대 16회 = 8초
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        self.evaluateScrapeJS(webView: webView, attemptsLeft: attemptsLeft - 1)
+                    }
+                } else {
+                    // 8초 폴링했는데도 % 없음 — DOM dump 후 fail
+                    NSLog("[scraper] poll exhausted, page dump first 800ch: \(text.prefix(800))")
+                    guard let p = self.pending else { return }
+                    self.pending = nil
+                    self.hardTimeoutWork?.cancel()
+                    p(.failure(.domEmpty))
                 }
             }
         }
+    }
+
+    private struct PercentExtraction {
+        let fiveHour: Int?
+        let weekly:   Int?
+        let opus:     Int?
+    }
+
+    private func extractPercents(from text: String) -> PercentExtraction {
+        // 정규식 매칭은 NSRegularExpression — Swift String.range(of:options:.regularExpression) 사용
+        func match(_ pattern: String, in text: String) -> Int? {
+            guard let range = text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) else { return nil }
+            let matched = String(text[range])
+            // matched 안에서 첫 숫자% 추출
+            if let pctRange = matched.range(of: #"(\d+)\s*%"#, options: .regularExpression) {
+                let digits = matched[pctRange].filter { $0.isNumber }
+                return Int(digits)
+            }
+            return nil
+        }
+
+        let fiveHourPatterns = [
+            #"5[-\s]?hour[\s\S]{0,100}?\d+\s*%"#,
+            #"\d+\s*%[\s\S]{0,50}?5[-\s]?hour"#,
+            #"5시간[\s\S]{0,50}?\d+\s*%"#,
+            #"\d+\s*%[\s\S]{0,50}?5시간"#
+        ]
+        let weeklyPatterns = [
+            #"week[ly]*[\s\S]{0,100}?\d+\s*%"#,
+            #"\d+\s*%[\s\S]{0,50}?week[ly]*"#,
+            #"주간[\s\S]{0,50}?\d+\s*%"#,
+            #"\d+\s*%[\s\S]{0,50}?주간"#
+        ]
+        let opusPatterns = [
+            #"opus[\s\S]{0,100}?\d+\s*%"#,
+            #"\d+\s*%[\s\S]{0,50}?opus"#
+        ]
+
+        func firstMatch(_ patterns: [String]) -> Int? {
+            for p in patterns {
+                if let v = match(p, in: text) { return v }
+            }
+            return nil
+        }
+
+        return PercentExtraction(
+            fiveHour: firstMatch(fiveHourPatterns),
+            weekly:   firstMatch(weeklyPatterns),
+            opus:     firstMatch(opusPatterns)
+        )
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
