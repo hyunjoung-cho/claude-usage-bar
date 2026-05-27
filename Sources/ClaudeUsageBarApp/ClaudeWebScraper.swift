@@ -95,21 +95,42 @@ final class ClaudeWebScraper: NSObject {
 
 extension ClaudeWebScraper: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        NSLog("[scraper] didFinish navigation, URL=\(webView.url?.absoluteString ?? "nil")")
-        // SPA라서 페이지 마운트 후 데이터 fetch + 렌더에 시간 걸림.
-        // 최대 8초 polling으로 DOM에서 % 추출 시도.
+        let urlStr = webView.url?.absoluteString ?? ""
+        NSLog("[scraper] didFinish navigation, URL=\(urlStr)")
+
+        // 1) Login/sign-in 페이지로 도달 = 세션 없음. 즉시 notLoggedIn.
+        let lower = urlStr.lowercased()
+        if lower.contains("/login") || lower.contains("/sign-in") || lower.contains("/sign_in") || lower.contains("/oauth") {
+            NSLog("[scraper] detected login page → notLoggedIn")
+            guard let p = pending else { return }
+            pending = nil
+            hardTimeoutWork?.cancel()
+            p(.failure(.notLoggedIn))
+            return
+        }
+
+        // 2) /settings/usage 가 아닌 다른 페이지면 redirect 진행 중. 무시 + 다음 didFinish 기다림.
+        if !lower.contains("/settings/usage") {
+            NSLog("[scraper] interim navigation, waiting for next didFinish")
+            return
+        }
+
+        // 3) /settings/usage 도달. 0.5초 대기 후 JS 평가 (redirect chain 안정화).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.evaluateScrapeJS(webView: webView)
+        }
+    }
+
+    private func evaluateScrapeJS(webView: WKWebView) {
         let js = """
         new Promise((resolve) => {
             const deadline = Date.now() + 8000;
             const extract = () => {
                 const text = (document.body && document.body.innerText) || '';
-                // 로그인 페이지 체크 — "Continue with Google" 또는 "Sign in" 등
                 if (/sign in|continue with|로그인/i.test(text) && !/used|사용/i.test(text)) {
                     resolve({ status: 'notLoggedIn' });
                     return;
                 }
-                // 5h / weekly / opus 별 % 라벨 + 숫자 추출 시도
-                // 영어 패턴 + 한국어 패턴 모두 시도
                 const patterns = {
                     fiveHour: [
                         /5[\\s-]*hour[\\s\\S]{0,80}?(\\d+)\\s*%/i,
@@ -135,19 +156,17 @@ extension ClaudeWebScraper: WKNavigationDelegate {
                         if (m) { out[key] = parseInt(m[1]); break; }
                     }
                 }
-                // 적어도 fiveHour 잡혔으면 성공으로 간주
                 if (out.fiveHour !== null) {
                     resolve({ status: 'ok', ...out });
                     return;
                 }
-                // 첫 % 라도 잡혔으면 부분 성공
                 const anyPct = text.match(/(\\d+)\\s*%/);
                 if (anyPct && Date.now() > deadline - 1000) {
                     resolve({ status: 'partial', fiveHour: parseInt(anyPct[1]), weekly: null, opus: null });
                     return;
                 }
                 if (Date.now() > deadline) {
-                    resolve({ status: 'empty', dump: text.substring(0, 500) });
+                    resolve({ status: 'empty', dump: text.substring(0, 1000) });
                     return;
                 }
                 setTimeout(extract, 300);
@@ -156,40 +175,56 @@ extension ClaudeWebScraper: WKNavigationDelegate {
         });
         """
         webView.callAsyncJavaScript(js, arguments: [:], in: nil, in: .page) { [weak self] result in
-            guard let self = self else { return }
-            guard let pending = self.pending else { return }
-            self.pending = nil
-            self.hardTimeoutWork?.cancel()
+            Task { @MainActor in
+                guard let self = self else { return }
+                guard let pending = self.pending else { return }
 
-            switch result {
-            case .success(let value):
-                NSLog("[scraper] JS success: \(String(describing: value).prefix(200))")
-                guard let dict = value as? [String: Any], let status = dict["status"] as? String else {
-                    pending(.failure(.js("unexpected result shape")))
-                    return
+                switch result {
+                case .success(let value):
+                    NSLog("[scraper] JS success: \(String(describing: value).prefix(200))")
+                    // JS Promise가 navigation away로 cancel되면 NSNull 또는 딕셔너리 캐스팅 실패
+                    // → pending 유지, 다음 didFinish에서 재시도
+                    guard let dict = value as? [String: Any] else {
+                        if value is NSNull {
+                            NSLog("[scraper] JS returned NSNull (navigation away) — keeping pending, waiting for next didFinish")
+                        } else {
+                            NSLog("[scraper] JS unexpected shape: \(String(describing: value).prefix(200)) — keeping pending")
+                        }
+                        return
+                    }
+                    guard let status = dict["status"] as? String else {
+                        self.pending = nil
+                        self.hardTimeoutWork?.cancel()
+                        pending(.failure(.js("unexpected result shape: \(String(describing: value))")))
+                        return
+                    }
+                    self.pending = nil
+                    self.hardTimeoutWork?.cancel()
+                    switch status {
+                    case "notLoggedIn":
+                        NSLog("[scraper] status=notLoggedIn")
+                        pending(.failure(.notLoggedIn))
+                    case "ok", "partial":
+                        NSLog("[scraper] status=\(status), fiveHour=\(dict["fiveHour"] ?? "nil")")
+                        let usage = ScrapedUsage(
+                            fiveHourPercent: dict["fiveHour"] as? Int,
+                            weeklyPercent:   dict["weekly"]   as? Int,
+                            opusPercent:     dict["opus"]     as? Int
+                        )
+                        pending(.success(usage))
+                    case "empty":
+                        let dump = (dict["dump"] as? String) ?? ""
+                        NSLog("[ClaudeUsageBar] scrape empty, page dump: \(dump.prefix(1000))")
+                        pending(.failure(.domEmpty))
+                    default:
+                        pending(.failure(.js("unknown status: \(status)")))
+                    }
+                case .failure(let err):
+                    NSLog("[scraper] JS error: \(err.localizedDescription)")
+                    self.pending = nil
+                    self.hardTimeoutWork?.cancel()
+                    pending(.failure(.js(err.localizedDescription)))
                 }
-                switch status {
-                case "notLoggedIn":
-                    NSLog("[scraper] status=notLoggedIn")
-                    pending(.failure(.notLoggedIn))
-                case "ok", "partial":
-                    NSLog("[scraper] status=\(status), fiveHour=\(dict["fiveHour"] ?? "nil")")
-                    let usage = ScrapedUsage(
-                        fiveHourPercent: dict["fiveHour"] as? Int,
-                        weeklyPercent:   dict["weekly"]   as? Int,
-                        opusPercent:     dict["opus"]     as? Int
-                    )
-                    pending(.success(usage))
-                case "empty":
-                    let dump = (dict["dump"] as? String) ?? ""
-                    NSLog("[scraper] status=empty, page dump: \(dump.prefix(1000))")
-                    pending(.failure(.domEmpty))
-                default:
-                    pending(.failure(.js("unknown status: \(status)")))
-                }
-            case .failure(let err):
-                NSLog("[scraper] JS error: \(err.localizedDescription)")
-                pending(.failure(.js(err.localizedDescription)))
             }
         }
     }
@@ -197,14 +232,23 @@ extension ClaudeWebScraper: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         NSLog("[scraper] didFail navigation: \(error.localizedDescription)")
         hardTimeoutWork?.cancel()
-        pending?(.failure(.navigation(error.localizedDescription)))
+        guard let p = pending else { return }
         pending = nil
+        p(.failure(.navigation(error.localizedDescription)))
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         NSLog("[scraper] didFailProvisional: \(error.localizedDescription)")
+        // NSURLErrorCancelled (-999) = redirect chain 도중 이전 request가 취소됨.
+        // 실제 실패가 아니므로 pending 유지, 다음 didFinish 기다림.
+        let nsErr = error as NSError
+        if nsErr.domain == NSURLErrorDomain && nsErr.code == NSURLErrorCancelled {
+            NSLog("[scraper] didFailProvisional -999 (redirect cancel) — keeping pending")
+            return
+        }
         hardTimeoutWork?.cancel()
-        pending?(.failure(.navigation(error.localizedDescription)))
+        guard let p = pending else { return }
         pending = nil
+        p(.failure(.navigation(error.localizedDescription)))
     }
 }
