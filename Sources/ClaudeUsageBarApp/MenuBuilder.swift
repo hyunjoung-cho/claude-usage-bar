@@ -25,6 +25,7 @@ final class MenuBuilder {
         usage: UsageData?,
         sets: [IconSet],
         activeSet: String,
+        thresholds: Thresholds = .default,    // NEW
         onRefresh: @escaping () -> Void,
         onSelectSet: @escaping (String) -> Void,
         onSettings: @escaping () -> Void = {},
@@ -38,7 +39,7 @@ final class MenuBuilder {
 
         addUsageSection(to: menu, usage: usage)
         menu.addItem(.separator())
-        addIconSetSection(to: menu, sets: sets, activeSet: activeSet)
+        addIconSetSection(to: menu, sets: sets, activeSet: activeSet, thresholds: thresholds)
         menu.addItem(.separator())
         addActionSection(to: menu)
         menu.addItem(.separator())
@@ -89,7 +90,7 @@ final class MenuBuilder {
 
     // MARK: - 캐릭터셋 섹션
 
-    private func addIconSetSection(to menu: NSMenu, sets: [IconSet], activeSet: String) {
+    private func addIconSetSection(to menu: NSMenu, sets: [IconSet], activeSet: String, thresholds: Thresholds) {
         let header = NSMenuItem(title: "🎭 캐릭터셋", action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
@@ -111,8 +112,43 @@ final class MenuBuilder {
             item.target = self
             selectSetMap[ObjectIdentifier(item)] = set.name
             setItems.append(item)
+
+            // 5단계 미리보기 submenu — 마우스 오버 시 자동 펼침
+            item.submenu = buildPreviewSubmenu(for: set, thresholds: thresholds)
+
             menu.addItem(item)
         }
+    }
+
+    private func buildPreviewSubmenu(for set: IconSet, thresholds t: Thresholds) -> NSMenu {
+        let submenu = NSMenu()
+
+        // 단계별 (stage, %범위, 한국어이름)
+        let stages: [(stage: Stage, range: String, label: String)] = [
+            (.chill,  "0-\(t.chillMax)%",                       "여유"),
+            (.normal, "\(t.chillMax)-\(t.normalMax)%",          "보통"),
+            (.busy,   "\(t.normalMax)-\(t.busyMax)%",           "임박"),
+            (.danger, "\(t.busyMax)-\(t.dangerMax)%",           "위험"),
+            (.burn,   "\(t.dangerMax)-100%",                    "불탐"),
+        ]
+
+        for (stage, range, label) in stages {
+            let glyph: String
+            switch set.type {
+            case .emoji:
+                glyph = set.value(for: stage)
+            case .png:
+                // PNG 세트는 submenu에서 파일이름 대신 placeholder 표시
+                glyph = "▢"
+            }
+            // "😎  0-40%    여유" — 정렬 위해 padding
+            let paddedRange = range.padding(toLength: 10, withPad: " ", startingAt: 0)
+            let title = "\(glyph)   \(paddedRange)  \(label)"
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.isEnabled = false   // 미리보기만, 클릭 비활성
+            submenu.addItem(item)
+        }
+        return submenu
     }
 
     @objc private func handleSelectSet(_ sender: NSMenuItem) {

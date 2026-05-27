@@ -107,6 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             usage: usage,
             sets: sets,
             activeSet: config.activeSet,
+            thresholds: config.thresholds,         // NEW
             onRefresh: { [weak self] in self?.handleRefresh() },
             onSelectSet: { [weak self] name in self?.handleSelectSet(name) },
             onSettings: { [weak self] in
