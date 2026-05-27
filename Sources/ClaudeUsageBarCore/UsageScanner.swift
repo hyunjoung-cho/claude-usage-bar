@@ -64,10 +64,17 @@ public final class UsageScanner {
 
                 if ts < weeklyStart { continue }
 
-                let tokens = usage.input_tokens
-                           + (usage.cache_creation_input_tokens ?? 0)
-                           + (usage.cache_read_input_tokens ?? 0)
-                           + usage.output_tokens
+                // Anthropic 가격표 기반 weighted token 계산 :
+                // - input        : 1x
+                // - cache_create : 1.25x (cache 쓰기는 input보다 25% 비쌈)
+                // - cache_read   : 0.1x  (cache 읽기는 input의 1/10 비용)
+                // - output       : 5x    (output은 input의 5배 비쌈)
+                //
+                // 모델별 가중치(Opus 5x / Sonnet 1x / Haiku 0.25x)는 v2에서 추가 예정.
+                let cc = Double(usage.cache_creation_input_tokens ?? 0) * 1.25
+                let cr = Double(usage.cache_read_input_tokens ?? 0)     * 0.1
+                let out = Double(usage.output_tokens)                   * 5.0
+                let tokens = usage.input_tokens + Int(cc) + Int(cr) + Int(out)
 
                 weeklyTotal += tokens
 

@@ -306,10 +306,11 @@ suite("UsageScanner — 단일 assistant 라인 파싱") {
     let scanner = UsageScanner(projectsRoot: root, now: { fixedNow })
     let result = scanner.scan(limits: .pro)
     if case .success(let usage) = result {
-        check(usage.fiveHourWindow.usedTokens == 1000, "fiveHourTotal == 1000 (100+200+300+400)")
+        // weighted: 100 + (200×1.25=250) + (300×0.1=30) + (400×5=2000) = 2380
+        check(usage.fiveHourWindow.usedTokens == 2380, "fiveHourTotal == 2380 (weighted)")
         check(usage.opusWindow.usedTokens == 0,        "opusTotal == 0 (sonnet이라 Opus 아님)")
-        check(usage.weeklyWindow.usedTokens == 1000,   "weeklyTotal == 1000")
-        check(usage.fiveHourWindow.usedPercent == 2,   "fiveHour usedPercent == 2% (1000/50000)")
+        check(usage.weeklyWindow.usedTokens == 2380,   "weeklyTotal == 2380 (weighted)")
+        check(usage.fiveHourWindow.usedPercent == 0,   "fiveHour usedPercent == 0% (2380/6_000_000)")
     } else {
         check(false, "기대 .success, 실제 \(result)")
     }
@@ -336,9 +337,11 @@ suite("UsageScanner — Opus 모델만 opusTotal에 합산") {
     let scanner = UsageScanner(projectsRoot: root, now: { fixedNow })
     let result = scanner.scan(limits: .pro)
     if case .success(let usage) = result {
-        check(usage.fiveHourWindow.usedTokens == 1200, "fiveHourTotal == 1200 (500+700)")
-        check(usage.opusWindow.usedTokens == 700,      "opusTotal == 700 (opus만)")
-        check(usage.weeklyWindow.usedTokens == 1200,   "weeklyTotal == 1200")
+        // Sonnet weighted: 100 + (100×1.25=125) + (100×0.1=10) + (200×5=1000) = 1235
+        // Opus   weighted: 200 + (200×1.25=250) + (100×0.1=10) + (200×5=1000) = 1460
+        check(usage.fiveHourWindow.usedTokens == 2695, "fiveHourTotal == 2695 (1235+1460, weighted)")
+        check(usage.opusWindow.usedTokens == 1460,     "opusTotal == 1460 (opus 가중치 적용)")
+        check(usage.weeklyWindow.usedTokens == 2695,   "weeklyTotal == 2695 (weighted)")
     } else {
         check(false, "기대 .success, 실제 \(result)")
     }
@@ -366,8 +369,9 @@ suite("UsageScanner — 5h 윈도우 밖 메시지는 제외") {
     let scanner = UsageScanner(projectsRoot: root, now: { fixedNow })
     let result = scanner.scan(limits: .pro)
     if case .success(let usage) = result {
-        check(usage.fiveHourWindow.usedTokens == 1000, "fiveHourTotal == 1000 (1시간 전만)")
-        check(usage.weeklyWindow.usedTokens == 2000,   "weeklyTotal == 2000 (둘 다 주간 안)")
+        // weighted per line: 250 + (250×1.25=312) + (250×0.1=25) + (250×5=1250) = 1837
+        check(usage.fiveHourWindow.usedTokens == 1837, "fiveHourTotal == 1837 (1시간 전만, weighted)")
+        check(usage.weeklyWindow.usedTokens == 3674,   "weeklyTotal == 3674 (둘 다 주간 안, weighted)")
     } else {
         check(false, "기대 .success, 실제 \(result)")
     }
