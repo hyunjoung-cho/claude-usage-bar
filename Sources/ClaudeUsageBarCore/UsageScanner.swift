@@ -71,12 +71,22 @@ public final class UsageScanner {
                 // - cache_create : 1.25x (cache 쓰기는 input보다 25% 비쌈)
                 // - cache_read   : 0.1x  (cache 읽기는 input의 1/10 비용)
                 // - output       : 5x    (output은 input의 5배 비쌈)
-                //
-                // 모델별 가중치(Opus 5x / Sonnet 1x / Haiku 0.25x)는 v2에서 추가 예정.
                 let cc = Double(usage.cache_creation_input_tokens ?? 0) * 1.25
                 let cr = Double(usage.cache_read_input_tokens ?? 0)     * 0.1
                 let out = Double(usage.output_tokens)                   * 5.0
-                let tokens = usage.input_tokens + Int(cc) + Int(cr) + Int(out)
+                let rawWeighted = Double(usage.input_tokens) + cc + cr + out
+
+                // 모델별 가중치 : Anthropic 가격 기반
+                // - Opus  : 5.0x (Sonnet 대비 5배 비쌈, input $15/M output $75/M)
+                // - Sonnet: 1.0x (기준, input $3/M output $15/M)
+                // - Haiku : 0.25x (Sonnet의 1/4, input $0.80/M output $4/M)
+                let modelLower = (msg.model ?? "").lowercased()
+                let modelMultiplier: Double
+                if modelLower.contains("opus")        { modelMultiplier = 5.0 }
+                else if modelLower.contains("haiku")  { modelMultiplier = 0.25 }
+                else                                  { modelMultiplier = 1.0 }   // sonnet 또는 unknown
+
+                let tokens = Int(rawWeighted * modelMultiplier)
 
                 weeklyTotal += tokens
                 if oldestInWeek == nil || ts < oldestInWeek! {

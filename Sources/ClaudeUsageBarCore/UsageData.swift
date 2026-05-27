@@ -12,18 +12,19 @@ public struct TokenLimits: Codable, Equatable {
         self.opus = opus
     }
 
-    // Max 5x 사용자의 38% claude.ai 표시 vs 우리 weighted 11.3M tokens 측정 결과
-    // → 진짜 한도 ≈ 30M weighted tokens. Pro/Max20x도 5x/20x 비례.
+    // Max 5x 사용자 측정 데이터로 calibration :
+    // 5h model-weighted 47.6M tokens 시점에 claude.ai 30% 표시 → 진짜 한도 ≈ 159M
+    // 160M으로 반올림. Pro / Max20x는 5x/20x dollar 비율 그대로 (5/25/100).
     //
     // Anthropic dollar 한도 (비공식) :
-    // - Pro    : ~$5  / 5h
-    // - Max5x  : ~$25 / 5h
-    // - Max20x : ~$100 / 5h
+    // - Pro    : ~$5  / 5h  → 32M tokens
+    // - Max5x  : ~$25 / 5h  → 160M tokens
+    // - Max20x : ~$100 / 5h → 640M tokens
     //
-    // Opus 별도 한도는 5h 한도의 약 20% (Opus가 Sonnet 대비 5배 비싸므로 토큰 한도는 1/5).
-    public static let pro    = TokenLimits(fiveHour:   6_000_000, weekly:  180_000_000, opus:  1_200_000)
-    public static let max5x  = TokenLimits(fiveHour:  30_000_000, weekly:  900_000_000, opus:  6_000_000)
-    public static let max20x = TokenLimits(fiveHour: 120_000_000, weekly: 3_600_000_000, opus: 24_000_000)
+    // Opus 한도 = 5h 한도의 약 20% (Opus 메시지 한도가 일반 한도보다 빨리 도달).
+    public static let pro    = TokenLimits(fiveHour:   32_000_000, weekly:   960_000_000, opus:   6_400_000)
+    public static let max5x  = TokenLimits(fiveHour:  160_000_000, weekly: 4_800_000_000, opus:  32_000_000)
+    public static let max20x = TokenLimits(fiveHour:  640_000_000, weekly:19_200_000_000, opus: 128_000_000)
 }
 
 /// 사용자 Claude plan.

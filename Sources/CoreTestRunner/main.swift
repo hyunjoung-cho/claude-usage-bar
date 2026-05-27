@@ -306,11 +306,12 @@ suite("UsageScanner — 단일 assistant 라인 파싱") {
     let scanner = UsageScanner(projectsRoot: root, now: { fixedNow })
     let result = scanner.scan(limits: .pro)
     if case .success(let usage) = result {
-        // weighted: 100 + (200×1.25=250) + (300×0.1=30) + (400×5=2000) = 2380
-        check(usage.fiveHourWindow.usedTokens == 2380, "fiveHourTotal == 2380 (weighted)")
+        // rawWeighted: 100 + (200×1.25=250) + (300×0.1=30) + (400×5=2000) = 2380
+        // sonnet → modelMultiplier 1.0 → tokens = 2380
+        check(usage.fiveHourWindow.usedTokens == 2380, "fiveHourTotal == 2380 (weighted, sonnet 1x)")
         check(usage.opusWindow.usedTokens == 0,        "opusTotal == 0 (sonnet이라 Opus 아님)")
         check(usage.weeklyWindow.usedTokens == 2380,   "weeklyTotal == 2380 (weighted)")
-        check(usage.fiveHourWindow.usedPercent == 0,   "fiveHour usedPercent == 0% (2380/6_000_000)")
+        check(usage.fiveHourWindow.usedPercent == 0,   "fiveHour usedPercent == 0% (2380/32_000_000)")
     } else {
         check(false, "기대 .success, 실제 \(result)")
     }
@@ -337,11 +338,12 @@ suite("UsageScanner — Opus 모델만 opusTotal에 합산") {
     let scanner = UsageScanner(projectsRoot: root, now: { fixedNow })
     let result = scanner.scan(limits: .pro)
     if case .success(let usage) = result {
-        // Sonnet weighted: 100 + (100×1.25=125) + (100×0.1=10) + (200×5=1000) = 1235
-        // Opus   weighted: 200 + (200×1.25=250) + (100×0.1=10) + (200×5=1000) = 1460
-        check(usage.fiveHourWindow.usedTokens == 2695, "fiveHourTotal == 2695 (1235+1460, weighted)")
-        check(usage.opusWindow.usedTokens == 1460,     "opusTotal == 1460 (opus 가중치 적용)")
-        check(usage.weeklyWindow.usedTokens == 2695,   "weeklyTotal == 2695 (weighted)")
+        // Sonnet rawWeighted: 100 + (100×1.25=125) + (100×0.1=10) + (200×5=1000) = 1235 → ×1.0 = 1235
+        // Opus   rawWeighted: 200 + (200×1.25=250) + (100×0.1=10) + (200×5=1000) = 1460 → ×5.0 = 7300
+        // fiveHourTotal = 1235 + 7300 = 8535, opusTotal = 7300
+        check(usage.fiveHourWindow.usedTokens == 8535, "fiveHourTotal == 8535 (1235+7300, model-weighted)")
+        check(usage.opusWindow.usedTokens == 7300,     "opusTotal == 7300 (opus rawWeighted 1460 × 5.0)")
+        check(usage.weeklyWindow.usedTokens == 8535,   "weeklyTotal == 8535 (weighted)")
     } else {
         check(false, "기대 .success, 실제 \(result)")
     }
