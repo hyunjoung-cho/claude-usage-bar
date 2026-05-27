@@ -219,21 +219,26 @@ extension ClaudeWebScraper: WKNavigationDelegate {
             return nil
         }
 
+        // 실제 claude.ai/settings/usage 페이지의 한국어 라벨 기반
         let fiveHourPatterns = [
-            #"5[-\s]?hour[\s\S]{0,100}?\d+\s*%"#,
-            #"\d+\s*%[\s\S]{0,50}?5[-\s]?hour"#,
-            #"5시간[\s\S]{0,50}?\d+\s*%"#,
-            #"\d+\s*%[\s\S]{0,50}?5시간"#
+            // "현재 세션" 라벨 → "X% 사용됨" — 5h block
+            #"현재 세션[\s\S]{0,300}?\d+\s*%\s*사용됨"#,
+            // 영어 fallback
+            #"current session[\s\S]{0,300}?\d+\s*%"#
         ]
         let weeklyPatterns = [
-            #"week[ly]*[\s\S]{0,100}?\d+\s*%"#,
-            #"\d+\s*%[\s\S]{0,50}?week[ly]*"#,
-            #"주간[\s\S]{0,50}?\d+\s*%"#,
-            #"\d+\s*%[\s\S]{0,50}?주간"#
+            // "주간 한도" + "모든 모델" 라벨 → "X% 사용됨"
+            #"주간 한도[\s\S]{0,100}?모든 모델[\s\S]{0,300}?\d+\s*%\s*사용됨"#,
+            // 영어 fallback
+            #"weekly[\s\S]{0,100}?all models[\s\S]{0,300}?\d+\s*%"#
         ]
         let opusPatterns = [
-            #"opus[\s\S]{0,100}?\d+\s*%"#,
-            #"\d+\s*%[\s\S]{0,50}?opus"#
+            // "Sonnet만" 라벨 → "X% 사용됨" — Opus 슬롯에 매핑 (페이지에 명시적 Opus 섹션 없음, Sonnet 한도가 대신)
+            #"Sonnet만[\s\S]{0,300}?\d+\s*%\s*사용됨"#,
+            // 영어 fallback
+            #"Sonnet only[\s\S]{0,300}?\d+\s*%"#,
+            // 진짜 opus 라벨이 있다면
+            #"opus[\s\S]{0,100}?\d+\s*%"#
         ]
 
         func firstMatch(_ patterns: [String]) -> Int? {
