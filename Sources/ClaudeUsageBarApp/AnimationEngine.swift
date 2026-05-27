@@ -17,6 +17,7 @@ final class AnimationEngine {
 
     func use(set: IconSet) {
         self.currentSet = set
+        renderText(percent: lastPercent, timeLeftSec: lastTimeLeftSec)
         renderIcon()
     }
 

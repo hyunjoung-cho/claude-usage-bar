@@ -35,6 +35,8 @@ public final class UsageScanner {
         var fiveHourTotal = 0
         var weeklyTotal   = 0
         var opusTotal     = 0
+        var oldestInFiveHour: Date? = nil
+        var oldestInWeek:     Date? = nil
 
         let urls: [URL]
         do {
@@ -77,18 +79,26 @@ public final class UsageScanner {
                 let tokens = usage.input_tokens + Int(cc) + Int(cr) + Int(out)
 
                 weeklyTotal += tokens
+                if oldestInWeek == nil || ts < oldestInWeek! {
+                    oldestInWeek = ts
+                }
 
                 if ts >= fiveHourStart {
                     fiveHourTotal += tokens
                     if (msg.model ?? "").lowercased().contains("opus") {
                         opusTotal += tokens
                     }
+                    if oldestInFiveHour == nil || ts < oldestInFiveHour! {
+                        oldestInFiveHour = ts
+                    }
                 }
             }
         }
 
-        let fiveHourReset = now.addingTimeInterval(5 * 3600)
-        let weeklyReset   = now.addingTimeInterval(7 * 24 * 3600)
+        // "5h 윈도우 안 가장 오래된 메시지 + 5h" = block reset 시각
+        // 윈도우 안 메시지 없으면 fallback : now + 5h
+        let fiveHourReset = (oldestInFiveHour ?? now).addingTimeInterval(5 * 3600)
+        let weeklyReset   = (oldestInWeek     ?? now).addingTimeInterval(7 * 24 * 3600)
 
         let usage = UsageData(
             fiveHourWindow: UsageWindow(usedTokens: fiveHourTotal, limitTokens: limits.fiveHour, resetsAt: fiveHourReset),
