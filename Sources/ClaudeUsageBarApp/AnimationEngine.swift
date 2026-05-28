@@ -69,9 +69,11 @@ final class AnimationEngine {
     }
 
     private func toggleJump() {
+        // 펄쩍 효과는 이모지(텍스트) 캐릭터에만 적용한다.
+        // GIF/PNG 세트는 GIF 자체가 프레임 애니메이션으로 펄쩍거리므로,
+        // 텍스트 baseline까지 흔들면 퍼센트 글씨가 같이 요동쳐 가독성을 해친다.
+        guard currentSet?.type == .emoji else { return }
         jumpOffset = jumpOffset == 0 ? -2 : 0
-        renderIcon()
-        // PNG 모드일 때는 image도 같은 effect 받게 텍스트 재그림 트리거
         renderText(percent: lastPercent, timeLeftSec: lastTimeLeftSec)
     }
 
@@ -197,15 +199,20 @@ final class AnimationEngine {
         if showTimeLeft { parts.append(formatTime(timeLeftSec)) }
         let suffix = parts.isEmpty ? "" : " " + parts.joined(separator: " · ")
 
-        let attrs: [NSAttributedString.Key: Any] = [.baselineOffset: jumpOffset]
-
         if set.type == .emoji {
             let baseValue = set.value(for: currentStage)
             let full = baseValue + suffix
-            button.attributedTitle = NSAttributedString(string: full, attributes: attrs)
+            let attr = NSMutableAttributedString(string: full)
+            // 펄쩍 효과는 이모지 글자에만. 퍼센트/시간 텍스트는 고정해 가독성을 지킨다.
+            let emojiLen = (baseValue as NSString).length
+            if emojiLen > 0 {
+                attr.addAttribute(.baselineOffset, value: jumpOffset,
+                                  range: NSRange(location: 0, length: emojiLen))
+            }
+            button.attributedTitle = attr
         } else {
-            // PNG 모드 : 이미지는 따로, 텍스트만 attributedTitle
-            button.attributedTitle = NSAttributedString(string: suffix, attributes: attrs)
+            // PNG/GIF 모드 : 이미지는 GIF가 스스로 애니메이션하므로 텍스트는 흔들지 않는다.
+            button.attributedTitle = NSAttributedString(string: suffix)
             button.imagePosition = .imageLeading
         }
     }
