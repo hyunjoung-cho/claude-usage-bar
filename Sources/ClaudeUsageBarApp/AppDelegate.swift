@@ -15,6 +15,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var config: Config = .default
     private var sets:   [IconSet] = []
 
+    /// 한 번이라도 정상 사용량을 표시했는지. 일시적 네트워크/JS 오류 때
+    /// 마지막 정상값을 유지할지(true) "불러오는 중"을 보여줄지(false) 판단용.
+    private var hasShownGoodData = false
+
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
         bootstrap()
@@ -71,6 +75,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let activeSet = sets.first { $0.name == config.activeSet } ?? sets.first
         engine.use(thresholds: config.thresholds)
         engine.use(showPercent: config.showPercentInMenubar, showTimeLeft: config.showTimeLeftInMenubar)
+        engine.use(speedMultiplier: config.effectiveAnimationSpeed)
+        engine.use(animationEnabled: config.effectiveAnimationEnabled)
         if let s = activeSet { engine.use(set: s) }
         poller.limits = config.effectiveLimits     // NEW — 디스크에서 로드한 config의 plan 반영
         engine.showStatus(text: "loading…")
@@ -103,6 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         let leftSec = scraped.fiveHourResetSec ?? 0
                         self.engine.update(percent: pct, timeLeftSec: leftSec)
                         self.rebuildMenuFromScraped(scraped)
+                        self.hasShownGoodData = true
                     } else {
                         self.engine.showStatus(text: "❓ 페이지")
                         self.rebuildMenu()
@@ -115,7 +122,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     case .domEmpty:
                         self.engine.showStatus(text: "❓ DOM")
                     case .timeout, .js, .navigation:
-                        self.engine.showStatus(text: "🔌 web")
+                        // 일시적 네트워크/JS 오류. 한 번이라도 정상 표시했다면
+                        // 디버그 문구("web")로 덮지 말고 마지막 정상값을 그대로 유지한다.
+                        if self.hasShownGoodData { return }
+                        self.engine.showStatus(text: "⏳ 불러오는 중…")
                     }
                     self.rebuildMenu()
                 }
@@ -164,8 +174,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sets: sets,
             activeSet: config.activeSet,
             thresholds: config.thresholds,         // NEW
+            currentSpeed: config.effectiveAnimationSpeed,   // NEW
+            currentMotion: config.effectiveAnimationEnabled,   // NEW
             onRefresh: { [weak self] in self?.handleRefresh() },
             onSelectSet: { [weak self] name in self?.handleSelectSet(name) },
+            onSelectSpeed: { [weak self] speed in self?.handleSelectSpeed(speed) },
+            onToggleMotion: { [weak self] on in self?.handleToggleMotion(on) },
             onSettings: { [weak self] in
                 guard let self = self else { return }
                 SettingsView.present(
@@ -193,6 +207,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let s = sets.first(where: { $0.name == name }) {
             engine.use(set: s)
         }
+        rebuildMenu()
+    }
+
+    @MainActor
+    private func handleSelectSpeed(_ speed: Double) {
+        config.animationSpeed = speed
+        try? configStore.save(config)
+        engine.use(speedMultiplier: speed)
+        rebuildMenu()
+    }
+
+    @MainActor
+    private func handleToggleMotion(_ on: Bool) {
+        config.animationEnabled = on
+        try? configStore.save(config)
+        engine.use(animationEnabled: on)
         rebuildMenu()
     }
 

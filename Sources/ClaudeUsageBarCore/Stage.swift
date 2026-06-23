@@ -19,6 +19,7 @@ public enum Stage: String, Codable, CaseIterable, Equatable {
         case .burn:           return 0.5
         }
     }
+
 }
 
 public struct Thresholds: Codable, Equatable {
