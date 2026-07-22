@@ -21,10 +21,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
+        terminateOtherInstances()
         bootstrap()
         ensureDefaultSetsInstalled()
         loadStartup()
         startPolling()
+    }
+
+    /// 🔴 중복 실행 방지 — 같은 번들 ID의 다른 인스턴스가 이미 떠 있으면 그쪽을 종료시킵니다.
+    ///
+    /// "나중에 뜬 쪽이 살아남는다" 전략인 이유 : LaunchAgent가 `KeepAlive=true`라서
+    /// launchd가 띄운 인스턴스가 스스로 종료하면 launchd가 곧바로 되살려 무한 재시작이 됩니다.
+    /// 반대로 옛 인스턴스를 정리하면 어느 경로(launchd / Finder / open)로 실행하든 항상 1개로 수렴합니다.
+    @MainActor
+    private func terminateOtherInstances() {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return }
+        let mePID = ProcessInfo.processInfo.processIdentifier
+        let others = NSWorkspace.shared.runningApplications.filter {
+            $0.bundleIdentifier == bundleID && $0.processIdentifier != mePID
+        }
+        for app in others where !app.isTerminated {
+            NSLog("[instance] 중복 인스턴스 종료 pid=\(app.processIdentifier)")
+            if !app.terminate() { app.forceTerminate() }
+        }
     }
 
     @MainActor
