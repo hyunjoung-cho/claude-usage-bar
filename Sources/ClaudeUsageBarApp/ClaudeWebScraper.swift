@@ -12,11 +12,13 @@ import WebKit
 /// Cloudflare bot challenge는 진짜 브라우저(WKWebView)라 자동 통과.
 @MainActor
 final class ClaudeWebScraper: NSObject {
-    private let webView: WKWebView
+    private var webView: WKWebView
     private var loginWindow: NSWindow?
     private var pending: ((Result<ScrapedUsage, ScrapeError>) -> Void)?
     private var loadStartedAt: Date?
     private var hardTimeoutWork: DispatchWorkItem?
+    /// 백지 페이지(JS 미실행) 연속 횟수. 2회면 웹뷰를 통째로 재생성한다.
+    private var blankStreak = 0
 
     /// 페이지/ API에서 추출한 사용량. 가능한 것만 채움.
     struct ScrapedUsage {
@@ -34,7 +36,9 @@ final class ClaudeWebScraper: NSObject {
         case navigation(String)
     }
 
-    override init() {
+    /// 웹뷰 1개를 규격대로 생성. 재생성(자가복구) 때도 이 팩토리를 그대로 쓴다.
+    /// 데이터스토어 UUID가 고정이라 재생성해도 로그인 쿠키는 유지된다.
+    private static func makeWebView() -> WKWebView {
         let config = WKWebViewConfiguration()
         // 영구 cookie/세션 저장 — 한 번 로그인하면 다음 실행도 유지.
         // default() 는 LSUIElement 앱에서 비영속으로 동작할 수 있어 명시적 UUID 데이터스토어 사용.
@@ -51,35 +55,89 @@ final class ClaudeWebScraper: NSObject {
         let usageHook = """
         (function(){
             if (window.__usageHooked) return; window.__usageHooked = true;
+            window.__netlog = [];
+            function note(url){
+                try {
+                    if (typeof url !== 'string') return;
+                    if (url.indexOf('/api/') === -1) return;
+                    if (window.__netlog.length < 60) window.__netlog.push(url.split('?')[0]);
+                } catch(e){}
+            }
+            function isUsage(url){
+                if (typeof url !== 'string') return false;
+                var clean = url.split('?')[0];
+                return clean.indexOf('/api/organizations/') !== -1 && clean.slice(-6) === '/usage';
+            }
             var of = window.fetch;
             window.fetch = function(){
                 var a = arguments[0];
                 var url = (a && a.url) || a;
                 var pr = of.apply(this, arguments);
                 try {
-                    if (typeof url === 'string') {
-                        var clean = url.split('?')[0];
-                        if (clean.indexOf('/api/organizations/') !== -1 && clean.slice(-6) === '/usage') {
-                            window.__usageUrl = url;
-                            pr.then(function(r){
-                                try { r.clone().text().then(function(t){ window.__usageBody = t; }); } catch(e){}
-                            }).catch(function(){});
-                        }
+                    note(url);
+                    if (isUsage(url)) {
+                        window.__usageUrl = url;
+                        pr.then(function(r){
+                            try { r.clone().text().then(function(t){ window.__usageBody = t; }); } catch(e){}
+                        }).catch(function(){});
                     }
                 } catch(e){}
                 return pr;
             };
+            // XHR도 후킹 — 페이지가 fetch 대신 XHR로 부르는 경우 대비
+            try {
+                var oo = XMLHttpRequest.prototype.open;
+                XMLHttpRequest.prototype.open = function(m, u){
+                    try {
+                        note(u);
+                        if (isUsage(u)) {
+                            window.__usageUrl = u;
+                            this.addEventListener('load', function(){
+                                try { window.__usageBody = this.responseText; } catch(e){}
+                            });
+                        }
+                    } catch(e){}
+                    return oo.apply(this, arguments);
+                };
+            } catch(e){}
         })();
         """
         let ucc = WKUserContentController()
         ucc.addUserScript(WKUserScript(source: usageHook, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         config.userContentController = ucc
 
-        webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700), configuration: config)
+        let wv = WKWebView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700), configuration: config)
+        // 모바일 아닌 데스크탑 브라우저로 보이게
+        wv.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+        return wv
+    }
+
+    override init() {
+        webView = Self.makeWebView()
         super.init()
         webView.navigationDelegate = self
-        // 모바일 아닌 데스크탑 브라우저로 보이게
-        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+    }
+
+    /// 🔴 자가복구 — 웹뷰가 죽어(백지·JS 미실행) 다시 못 살아나는 상태에서 통째로 재생성한다.
+    ///
+    /// 실측(2026-08-19) : 맥 절전 → 깨어남 직후 `didFailProvisional: offline` 이후로
+    /// 매 로드가 didFinish는 오는데 페이지가 완전 백지(innerText 0, /api/ 호출 0건, userScript 미실행).
+    /// 프로세스를 재시작하면 즉시 정상 → 웹뷰 프로세스만 죽은 것. 앱엔 복구 경로가 없어 몇 시간씩 ❓ 였다.
+    private func rebuildWebView(reason: String) {
+        NSLog("[scraper] 🔄 웹뷰 재생성 — 이유: \(reason)")
+        let old = webView
+        old.navigationDelegate = nil
+        old.stopLoading()
+
+        let fresh = Self.makeWebView()
+        fresh.navigationDelegate = self
+        webView = fresh
+        blankStreak = 0
+
+        // 로그인 윈도우가 떠 있으면 새 웹뷰로 교체(옛 웹뷰는 죽어 있어 화면도 백지)
+        if let win = loginWindow, let vc = win.contentViewController {
+            vc.view = fresh
+        }
     }
 
     /// 사용자에게 로그인 윈도우를 노출합니다. 첫 실행 + 세션 만료 시.
@@ -183,10 +241,21 @@ extension ClaudeWebScraper: WKNavigationDelegate {
         (function(){
             var text = '';
             try { text = ((document.body && document.body.innerText) || '').substring(0, 8000); } catch(e){}
+            var html = '';
+            try { html = (document.documentElement && document.documentElement.innerHTML) || ''; } catch(e){}
             return JSON.stringify({
                 body: window.__usageBody || null,
                 url:  window.__usageUrl || null,
-                text: text
+                text: text,
+                diag: {
+                    href: location.href,
+                    title: document.title,
+                    ready: document.readyState,
+                    htmlLen: html.length,
+                    htmlHead: html.substring(0, 1200),
+                    net: window.__netlog || [],
+                    hooked: !!window.__usageHooked
+                }
             });
         })();
         """
@@ -213,6 +282,7 @@ extension ClaudeWebScraper: WKNavigationDelegate {
                     NSLog("[scraper] API success: 5h=\(usage.fiveHourPercent ?? -1) weekly=\(usage.weeklyPercent ?? -1) opus=\(usage.opusPercent ?? -1) resetSec=\(usage.fiveHourResetSec ?? -1)")
                     let dumpPath = NSHomeDirectory() + "/Library/Logs/ClaudeUsageBarApiDump.txt"
                     try? "API dump at \(Date()):\n\(body.prefix(4000))\n".write(toFile: dumpPath, atomically: true, encoding: .utf8)
+                    self.blankStreak = 0
                     self.finish(.success(usage))
                     return
                 }
@@ -251,6 +321,7 @@ extension ClaudeWebScraper: WKNavigationDelegate {
                 let ext = self.extractPercents(from: pageText)
                 if ext.fiveHour != nil || ext.weekly != nil || ext.opus != nil {
                     NSLog("[scraper] DOM fallback success: 5h=\(ext.fiveHour ?? -1) weekly=\(ext.weekly ?? -1)")
+                    self.blankStreak = 0
                     let resetSec = self.extractFiveHourResetSec(from: pageText)
                     self.finish(.success(ScrapedUsage(
                         fiveHourPercent: ext.fiveHour,
@@ -262,6 +333,21 @@ extension ClaudeWebScraper: WKNavigationDelegate {
                 }
 
                 NSLog("[scraper] poll exhausted — no API body, no DOM match. urlSeen=\(usageUrl != nil) textLen=\(pageText.count)")
+                self.writeDiag(parsed.diag)
+
+                // 🔴 백지(=userScript조차 안 돈 죽은 웹뷰) 판정 → 2회 연속이면 웹뷰 재생성
+                let htmlLen = (parsed.diag["htmlLen"] as? Int) ?? 0
+                let hooked  = (parsed.diag["hooked"] as? Bool) ?? false
+                if !hooked || htmlLen < 500 {
+                    self.blankStreak += 1
+                    NSLog("[scraper] 백지 감지 (\(self.blankStreak)회 연속) hooked=\(hooked) htmlLen=\(htmlLen)")
+                    if self.blankStreak >= 2 {
+                        self.rebuildWebView(reason: "백지 페이지 2회 연속 — 웹뷰 사망 판정")
+                    }
+                } else {
+                    self.blankStreak = 0
+                }
+
                 self.finish(.failure(.domEmpty))
             }
         }
@@ -269,18 +355,39 @@ extension ClaudeWebScraper: WKNavigationDelegate {
 
     // MARK: - JSON 파싱
 
-    private struct Outer { let body: String?; let url: String?; let text: String }
+    private struct Outer { let body: String?; let url: String?; let text: String; let diag: [String: Any] }
 
     private func parseOuter(_ raw: String) -> Outer {
         guard let data = raw.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return Outer(body: nil, url: nil, text: "")
+            return Outer(body: nil, url: nil, text: "", diag: [:])
         }
         return Outer(
             body: obj["body"] as? String,
             url:  obj["url"]  as? String,
-            text: (obj["text"] as? String) ?? ""
+            text: (obj["text"] as? String) ?? "",
+            diag: (obj["diag"] as? [String: Any]) ?? [:]
         )
+    }
+
+    /// 실패 시점의 페이지 실제 상태를 파일로 덤프. 원인(세션만료/CF차단/엔드포인트 변경) 판별용.
+    private func writeDiag(_ diag: [String: Any]) {
+        let net = (diag["net"] as? [String]) ?? []
+        let lines = """
+        === ClaudeUsageBar DIAG \(Date()) ===
+        href      : \(diag["href"] as? String ?? "?")
+        title     : \(diag["title"] as? String ?? "?")
+        readyState: \(diag["ready"] as? String ?? "?")
+        hookAlive : \(diag["hooked"] as? Bool ?? false)
+        htmlLen   : \(diag["htmlLen"] as? Int ?? -1)
+        /api/ 호출 \(net.count)건:
+        \(net.map { "  - " + $0 }.joined(separator: "\n"))
+        --- html head 1200 ---
+        \(diag["htmlHead"] as? String ?? "")
+        """
+        let path = NSHomeDirectory() + "/Library/Logs/ClaudeUsageBarDiag.txt"
+        try? lines.write(toFile: path, atomically: true, encoding: .utf8)
+        NSLog("[scraper] DIAG written: href=\(diag["href"] as? String ?? "?") htmlLen=\(diag["htmlLen"] as? Int ?? -1) apiCalls=\(net.count) hooked=\(diag["hooked"] as? Bool ?? false)")
     }
 
     /// `/api/organizations/{org}/usage` 응답 JSON → ScrapedUsage.
@@ -385,6 +492,14 @@ extension ClaudeWebScraper: WKNavigationDelegate {
             }
         }
         return nil
+    }
+
+    /// 웹콘텐츠 프로세스가 죽으면 WebKit이 알려준다. 이때 즉시 재생성하지 않으면
+    /// 이후 모든 로드가 백지로 "성공"해 위젯이 ❓ 상태로 굳는다.
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        NSLog("[scraper] ⚠️ 웹콘텐츠 프로세스 종료 감지 — 즉시 재생성")
+        finish(.failure(.timeout))
+        rebuildWebView(reason: "웹콘텐츠 프로세스 종료 통지")
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
